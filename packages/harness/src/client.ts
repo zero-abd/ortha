@@ -45,10 +45,19 @@ export function createOrthogonalClient(deps: OrthogonalClientDeps): OrthogonalCl
   const priceIndex = deps.priceIndex ?? new Map<string, Cents>();
   const priceKey = (api: string, path: string): string => `${api} ${path}`;
 
-  async function post(pathname: string, payload: unknown, extraHeaders: Record<string, string> = {}): Promise<unknown> {
+  // `retries` defaults to the client-wide maxRetries. Paid /run passes 0: the
+  // Orthogonal server does NOT honor idempotency-key (verified against the live
+  // API — identical keys produce distinct requestIds and charge twice), so a
+  // retry after an ambiguous timeout/5xx would double-charge. Reads stay retryable.
+  async function post(
+    pathname: string,
+    payload: unknown,
+    extraHeaders: Record<string, string> = {},
+    retries: number = maxRetries,
+  ): Promise<unknown> {
     const apiKey = await deps.getApiKey();
     let lastErr: OrthaError | undefined;
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    for (let attempt = 0; attempt <= retries; attempt++) {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), timeoutMs);
       try {
@@ -65,7 +74,7 @@ export function createOrthogonalClient(deps: OrthogonalClientDeps): OrthogonalCl
         clearTimeout(timer);
         if (res.ok) return await res.json();
         const err = await httpError(res);
-        if (err.retryable && attempt < maxRetries) {
+        if (err.retryable && attempt < retries) {
           lastErr = err;
           await sleep(backoffMs(attempt));
           continue;
@@ -74,7 +83,7 @@ export function createOrthogonalClient(deps: OrthogonalClientDeps): OrthogonalCl
       } catch (e) {
         clearTimeout(timer);
         if (e instanceof OrthaError) {
-          if (e.retryable && attempt < maxRetries) {
+          if (e.retryable && attempt < retries) {
             lastErr = e;
             await sleep(backoffMs(attempt));
             continue;
@@ -88,7 +97,7 @@ export function createOrthogonalClient(deps: OrthogonalClientDeps): OrthogonalCl
           aborted ? `request timed out after ${timeoutMs}ms` : `network error`,
           { retryable: true, cause: e },
         );
-        if (attempt < maxRetries) {
+        if (attempt < retries) {
           lastErr = err;
           await sleep(backoffMs(attempt));
           continue;
@@ -159,6 +168,7 @@ export function createOrthogonalClient(deps: OrthogonalClientDeps): OrthogonalCl
               "/run",
               { api: input.api, path: input.path, body: input.body, query: input.query },
               { "idempotency-key": input.idempotencyKey },
+              0, // paid mutation: never auto-retry (server doesn't dedupe → would double-charge)
             );
             const parsed = RunResponseSchema.parse(raw);
             return {

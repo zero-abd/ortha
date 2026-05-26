@@ -44,6 +44,21 @@ describe("search + estimateCost", () => {
     expect(est.hasUnknownPrices).toBe(true);
     expect(est.estimatedCents).toBe(0);
   });
+
+  it("retries reads (search) on 5xx — idempotent metadata is safe to retry", async () => {
+    let calls = 0;
+    const client = createOrthogonalClient({
+      getApiKey: apiKey,
+      maxRetries: 1,
+      fetchImpl: async () => {
+        calls++;
+        return calls === 1 ? jsonResponse({ error: "boom" }, 503) : jsonResponse(SEARCH_BODY);
+      },
+    });
+    const results = await client.search({ prompt: "enrich" });
+    expect(results[0]?.slug).toBe("apollo");
+    expect(calls).toBe(2); // retried once, then succeeded
+  });
 });
 
 describe("run", () => {
@@ -69,11 +84,11 @@ describe("run", () => {
     expect(calls).toBe(1); // 4xx is not retried
   });
 
-  it("retries 5xx then throws PROVIDER_DOWN", async () => {
+  it("does NOT retry a paid run on 5xx — no double-charge (server lacks idempotency dedup)", async () => {
     let calls = 0;
     const client = createOrthogonalClient({
       getApiKey: apiKey,
-      maxRetries: 1,
+      maxRetries: 2, // even with retries configured, run() forces 0
       fetchImpl: async () => {
         calls++;
         return jsonResponse({ error: "boom" }, 503);
@@ -81,7 +96,25 @@ describe("run", () => {
     });
     const err = await client.run({ api: "apollo", path: "/p", idempotencyKey: KEY }).catch((e) => e);
     expect(isOrthaError(err) && err.code).toBe(ErrorCode.PROVIDER_DOWN);
-    expect(calls).toBe(2); // initial + 1 retry
+    expect(calls).toBe(1); // paid mutation: never auto-retried
+  });
+
+  it("does NOT retry a paid run on timeout — the ambiguous-outcome double-charge guard", async () => {
+    let calls = 0;
+    const client = createOrthogonalClient({
+      getApiKey: apiKey,
+      maxRetries: 2,
+      fetchImpl: async () => {
+        calls++;
+        const e = new Error("aborted");
+        e.name = "AbortError";
+        throw e;
+      },
+    });
+    await expect(client.run({ api: "apollo", path: "/p", idempotencyKey: KEY })).rejects.toMatchObject({
+      code: ErrorCode.TIMEOUT,
+    });
+    expect(calls).toBe(1);
   });
 
   it("maps an aborted/timed-out fetch to TIMEOUT", async () => {
