@@ -1,21 +1,39 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { PermissionResponse, TraceEvent } from "@ortha/contracts";
 import { ApprovalChip } from "./components/ApprovalChip.tsx";
 import { CostMeter } from "./components/CostMeter.tsx";
+import { Dropdown } from "./components/Dropdown.tsx";
+import { Logo, Spinner } from "./components/Logo.tsx";
 import { RightPanel } from "./components/RightPanel.tsx";
 import { SettingsModal } from "./components/SettingsModal.tsx";
 import { SideEffectModal } from "./components/SideEffectModal.tsx";
 import { TraceBlock } from "./components/TraceBlock.tsx";
 import { useTheme } from "./lib/useTheme.ts";
 import { runTurn } from "./transport.ts";
+import { fetchHistory } from "./live.ts";
+import { API } from "./lib/config.ts";
+import { getSettings, listConversations, listKeys, putSettings, type ApiSettings, type Conversation } from "./lib/api.ts";
+import { PROVIDERS, defaultModelOf, providerOfModel } from "./lib/providers.ts";
 import type { ChatMessage, CostState, RawArtifact, TraceStep } from "./types.ts";
 
-const CAP_CENTS = 40;
-const MODELS = ["gemini-2.0-flash", "claude-sonnet", "gpt-4o", "openrouter/auto"];
-const EXAMPLES = [
-  "Who's the CEO of Stripe, and any recent news?",
-  "Find the work email for a founder at Vercel",
-  "Enrich this company: orthogonal.com",
+const DEFAULT_SETTINGS: ApiSettings = {
+  sessionCapCents: 500,
+  perCallWarnCents: 25,
+  monthlyCapCents: 10_000,
+  model: "gemini-2.0-flash",
+  theme: "system",
+  cacheTtlSeconds: 300,
+};
+
+const EXAMPLE_CATS = [
+  {
+    label: "Recruiting",
+    items: ["Find staff engineers in NYC with Rust experience", "Pull LinkedIn profiles for staff engineers at OpenAI"],
+  },
+  {
+    label: "Enrichment & research",
+    items: ["Who's the CEO of Stripe, and any recent news?", "Find the work email for a founder at Vercel"],
+  },
 ];
 
 type PermEvent = Extract<TraceEvent, { type: "permission_required" }>;
@@ -27,17 +45,23 @@ interface Pending {
 export function App() {
   const { applied, toggle } = useTheme();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [cost, setCost] = useState<CostState>({ sessionCents: 0, capCents: CAP_CENTS, remainingCents: 100_00 });
+  // Cap/remaining are seeded from server settings on mount; 0 until loaded so
+  // we never flash a misleading hardcoded cap.
+  const [cost, setCost] = useState<CostState>({ sessionCents: 0, capCents: 0, remainingCents: 0 });
+  const [costLive, setCostLive] = useState(false);
   const [breakdown, setBreakdown] = useState<{ api: string; cents: number }[]>([]);
   const [pending, setPending] = useState<Pending | null>(null);
   const [resolvedPerms, setResolvedPerms] = useState<Record<string, "approved" | "skipped">>({});
   const [panel, setPanel] = useState<RawArtifact | null>(null);
-  const [model, setModel] = useState(MODELS[0]);
+  const [settings, setSettings] = useState<ApiSettings>(DEFAULT_SETTINGS);
+  const [demo, setDemo] = useState(true);
+  const model = settings.model;
   const [running, setRunning] = useState(false);
   const [draft, setDraft] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const rawStore = useRef(new Map<string, unknown>());
-  const conversationId = useRef(crypto.randomUUID());
+  const [activeId, setActiveId] = useState<string>(() => crypto.randomUUID());
+  const [conversations, setConversations] = useState<Conversation[]>([]);
 
   const patchActive = useCallback((fn: (m: ChatMessage) => ChatMessage) => {
     setMessages((prev) => {
@@ -47,6 +71,61 @@ export function App() {
       return [...prev.slice(0, -1), fn(last)];
     });
   }, []);
+
+  const stepApi = useRef<Record<string, string>>({});
+  const apiForStep = (stepId: string): string => stepApi.current[stepId] ?? "tool";
+
+  const refreshConversations = useCallback(() => {
+    void listConversations().then(setConversations).catch(() => {});
+  }, []);
+  useEffect(() => refreshConversations(), [refreshConversations]);
+
+  // Live mode requires an active Orthogonal key AND a key for the current
+  // model's provider. Missing either => server silently runs in demo mode.
+  const detectDemo = useCallback(async (modelId: string) => {
+    try {
+      const keys = await listKeys();
+      const has = (provider: string) => keys.some((k) => k.provider === provider && k.status === "active");
+      const provider = providerOfModel(modelId);
+      setDemo(!(has("orthogonal") && has(provider)));
+    } catch {
+      setDemo(true);
+    }
+  }, []);
+
+  // Seed caps/remaining from persisted settings; detect demo mode.
+  useEffect(() => {
+    void (async () => {
+      const loaded = (await getSettings()) ?? DEFAULT_SETTINGS;
+      setSettings(loaded);
+      setCost((c) => ({ ...c, capCents: loaded.sessionCapCents, remainingCents: loaded.monthlyCapCents }));
+      void detectDemo(loaded.model);
+    })();
+  }, [detectDemo]);
+
+  // Persist a new model (provider default) and re-check demo mode for it.
+  const changeProvider = useCallback(
+    (providerId: string) => {
+      const nextModel = defaultModelOf(providerId);
+      setSettings((prev) => {
+        const next = { ...prev, model: nextModel };
+        void putSettings(next).catch(() => {});
+        return next;
+      });
+      void detectDemo(nextModel);
+    },
+    [detectDemo],
+  );
+
+  // Settings modal saved: adopt new values, reseed caps, recheck demo.
+  const onSettingsSaved = useCallback(
+    (next: ApiSettings) => {
+      setSettings(next);
+      setCost((c) => ({ ...c, capCents: next.sessionCapCents, remainingCents: costLive ? c.remainingCents : next.monthlyCapCents }));
+      void detectDemo(next.model);
+    },
+    [detectDemo, costLive],
+  );
 
   const onEvent = useCallback(
     (e: TraceEvent) => {
@@ -61,24 +140,16 @@ export function App() {
           }));
           break;
         case "tool_call_started":
-          patchActive((m) => ({
-            ...m,
-            steps: [...m.steps, { stepId: e.stepId, api: e.api, path: e.path, estCents: e.estCents, status: "running" }],
-          }));
+          patchActive((m) => ({ ...m, steps: [...m.steps, { stepId: e.stepId, api: e.api, path: e.path, estCents: e.estCents, status: "running" }] }));
           break;
         case "tool_result":
           patchActive((m) => ({
             ...m,
             steps: m.steps.map((s) =>
-              s.stepId === e.stepId
-                ? { ...s, status: e.ok ? "success" : "failed", summary: e.summary, priceCents: e.priceCents, latencyMs: e.latencyMs, requestId: e.requestId }
-                : s,
+              s.stepId === e.stepId ? { ...s, status: e.ok ? "success" : "failed", summary: e.summary, priceCents: e.priceCents, latencyMs: e.latencyMs, requestId: e.requestId } : s,
             ),
           }));
-          if (e.ok && e.priceCents > 0) {
-            patchActive((m) => m); // no-op keeps types happy
-            setBreakdown((b) => mergeSpend(b, apiForStep(e.stepId), e.priceCents));
-          }
+          if (e.ok && e.priceCents > 0) setBreakdown((b) => mergeSpend(b, apiForStep(e.stepId), e.priceCents));
           break;
         case "self_heal":
           patchActive((m) => ({
@@ -87,7 +158,12 @@ export function App() {
           }));
           break;
         case "cost_update":
-          setCost({ sessionCents: e.sessionCents, capCents: e.capCents, remainingCents: e.workspaceRemainingCents });
+          // Demo mode emits mock spend against a mock $100 cap; ignore it so the
+          // cost state (sidebar + meter) stays honest at $0 / the real session cap.
+          if (!demo) {
+            setCost({ sessionCents: e.sessionCents, capCents: e.capCents, remainingCents: e.workspaceRemainingCents });
+            setCostLive(true);
+          }
           break;
         case "error":
           patchActive((m) => ({ ...m, error: { code: e.code, message: e.message }, streaming: false }));
@@ -95,20 +171,13 @@ export function App() {
         case "done":
           patchActive((m) => ({ ...m, streaming: false }));
           break;
-        // permission_required is delivered via requestPermission(); permission_resolved is informational.
         case "permission_resolved":
         case "permission_required":
           break;
       }
     },
-    [patchActive],
+    [patchActive, demo],
   );
-
-  // map stepId → api for spend breakdown (we recorded api on the step)
-  const stepApi = useRef<Record<string, string>>({});
-  function apiForStep(stepId: string): string {
-    return stepApi.current[stepId] ?? "tool";
-  }
 
   const requestPermission = useCallback(
     (e: PermEvent): Promise<PermissionResponse> =>
@@ -131,12 +200,10 @@ export function App() {
       if (!text.trim() || running) return;
       setDraft("");
       stepApi.current = {};
-      const userId = `u_${Date.now()}`;
-      const aiId = `a_${Date.now()}`;
       setMessages((prev) => [
         ...prev,
-        { id: userId, role: "user", content: text, steps: [], streaming: false },
-        { id: aiId, role: "assistant", content: "", steps: [], streaming: true },
+        { id: `u_${Date.now()}`, role: "user", content: text, steps: [], streaming: false },
+        { id: `a_${Date.now()}`, role: "assistant", content: "", steps: [], streaming: true },
       ]);
       setRunning(true);
       try {
@@ -149,64 +216,146 @@ export function App() {
           rawStore: rawStore.current,
           startCents: cost.sessionCents,
           capCents: cost.capCents,
-          conversationId: conversationId.current,
+          conversationId: activeId,
         });
       } finally {
         setRunning(false);
+        refreshConversations();
       }
     },
-    [running, onEvent, requestPermission, cost.sessionCents, cost.capCents],
+    [running, onEvent, requestPermission, cost.sessionCents, cost.capCents, activeId, refreshConversations],
   );
 
   const openRaw = useCallback((requestId: string) => {
     setPanel({ title: requestId, requestId, data: rawStore.current.get(requestId) ?? { note: "no raw stored" } });
   }, []);
 
+  const resetSession = () => {
+    setMessages([]);
+    setBreakdown([]);
+    setPending(null);
+    setPanel(null);
+    setCostLive(false);
+    setCost({ sessionCents: 0, capCents: settings.sessionCapCents, remainingCents: settings.monthlyCapCents });
+  };
+
+  const newChat = () => {
+    resetSession();
+    setActiveId(crypto.randomUUID());
+  };
+
+  const selectConversation = async (id: string) => {
+    if (id === activeId || running) return;
+    resetSession();
+    setActiveId(id);
+    const hist = await fetchHistory(id, API);
+    setMessages(
+      hist
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .map((m, i) => ({ id: `h_${i}`, role: m.role as "user" | "assistant", content: m.content, steps: [], streaming: false })),
+    );
+  };
+
   const empty = messages.length === 0;
 
   return (
     <div className="app">
-      <header className="topbar">
-        <span className="topbar__brand">Ortha</span>
-        <Select value="Personal" options={["Personal", "Acme Inc"]} onChange={() => {}} ariaLabel="Workspace" />
-        <span className="topbar__spacer" />
-        <CostMeter sessionCents={cost.sessionCents} capCents={cost.capCents} breakdown={breakdown} />
-        <Select value={model ?? MODELS[0]!} options={MODELS} onChange={setModel} ariaLabel="Model" />
-        <button className="iconbtn" onClick={toggle} aria-label="Toggle theme">
-          {applied === "dark" ? "☀" : "☾"}
-        </button>
-        <button className="iconbtn" aria-label="Settings" onClick={() => setSettingsOpen(true)}>⚙</button>
-      </header>
-
-      <div className="body">
-        <nav className="rail rail--open" aria-label="Conversations">
-          <div className="rail__top">
-            <button className="btn-sm btn-sm--accent" onClick={() => setMessages([])}>+ New chat</button>
-          </div>
-          <ul className="rail__list">
-            <li className="rail__item">Stripe research</li>
-            <li className="rail__item">Lead enrichment</li>
-          </ul>
-          <div className="rail__account muted">almahmud.zero@gmail.com</div>
-        </nav>
-
-        <div className="stream-wrap">
-          <div className="stream">
-            <div className="stream__inner">
-              {empty ? (
-                <EmptyState onPick={send} />
-              ) : (
-                messages.map((m) => (
-                  <Message key={m.id} m={m} onOpenRaw={openRaw} pending={pending} resolvedPerms={resolvedPerms} onDecide={(r) => pending?.resolve(r)} cap={cost.capCents} session={cost.sessionCents} />
-                ))
-              )}
-            </div>
-          </div>
-          <Composer value={draft} onChange={setDraft} onSend={() => send(draft)} disabled={running} />
+      <aside className="sidebar">
+        <div className="sidebar__brand">
+          <Logo size={24} />
+          <span className="brand__word">Ortha</span>
         </div>
 
+        <button className="acct-switch">
+          <span>◐ Personal Account</span>
+          <span className="acct-switch__chev">▾</span>
+        </button>
+
+        <button className="new-chat" onClick={newChat}>+ New chat</button>
+
+        <div className="convos">
+          <div className="convos__label">Recent</div>
+          {conversations.length === 0 ? (
+            <div className="convos__empty">Your conversations appear here.</div>
+          ) : (
+            conversations.map((c) => (
+              <div
+                key={c.id}
+                className={`convo${c.id === activeId ? " convo--active" : ""}`}
+                onClick={() => void selectConversation(c.id)}
+                title={c.title}
+              >
+                {c.title || "Untitled"}
+              </div>
+            ))
+          )}
+        </div>
+
+        <div className="sidebar__foot">
+          <div className="balance">
+            <span>Session</span>
+            <span className="balance__amt">${(cost.sessionCents / 100).toFixed(2)} / ${(cost.capCents / 100).toFixed(2)}</span>
+          </div>
+          <button className="acct" onClick={() => setSettingsOpen(true)} aria-label="Account and settings">
+            <span className="acct__avatar">A</span>
+            <span className="acct__name">Abdullah Al Mahmud</span>
+            <span className="acct__chev">⚙</span>
+          </button>
+        </div>
+      </aside>
+
+      <main className="main">
+        <header className="main__top">
+          <span className="main__spacer" />
+          {!empty && <CostMeter sessionCents={cost.sessionCents} capCents={cost.capCents} breakdown={breakdown} demo={demo} />}
+          <Dropdown
+            value={providerOfModel(model)}
+            options={PROVIDERS.map((p) => ({ value: p.id, label: p.label }))}
+            onChange={changeProvider}
+            ariaLabel="Provider"
+          />
+          <button className="iconbtn" onClick={toggle} aria-label="Toggle theme">{applied === "dark" ? "☀" : "☾"}</button>
+        </header>
+
+        {empty ? (
+          <div className="stream-wrap">
+            <div className="welcome">
+              <h1 className="welcome__title">Welcome to Ortha</h1>
+              <p className="welcome__sub">Describe what you need — Ortha discovers the right tools and runs them.</p>
+              <div style={{ width: "100%", maxWidth: 720 }}>
+                <AskBox value={draft} onChange={setDraft} onSend={() => send(draft)} disabled={running} autoFocus />
+              </div>
+              <div className="cats">
+                {EXAMPLE_CATS.map((c) => (
+                  <div key={c.label} style={{ marginBottom: 18 }}>
+                    <div className="cat__label">{c.label}</div>
+                    <div className="cat__grid">
+                      {c.items.map((ex) => (
+                        <button key={ex} className="examplecard" onClick={() => send(ex)}>{ex}</button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="stream-wrap">
+            <div className="stream">
+              <div className="stream__inner">
+                {messages.map((m) => (
+                  <Message key={m.id} m={m} onOpenRaw={openRaw} pending={pending} resolvedPerms={resolvedPerms} onDecide={(r) => pending?.resolve(r)} cap={cost.capCents} session={cost.sessionCents} />
+                ))}
+              </div>
+            </div>
+            <div className="composer">
+              <AskBox value={draft} onChange={setDraft} onSend={() => send(draft)} disabled={running} />
+            </div>
+          </div>
+        )}
+
         <RightPanel artifact={panel} onClose={() => setPanel(null)} />
-      </div>
+      </main>
 
       {pending?.event.kind === "side_effect" && (
         <SideEffectModal
@@ -218,7 +367,7 @@ export function App() {
         />
       )}
 
-      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} onSaved={onSettingsSaved} />
     </div>
   );
 }
@@ -257,9 +406,10 @@ function Message({ m, onOpenRaw, pending, resolvedPerms, onDecide, cap, session 
           <ApprovalChip stepId={pending.event.stepId} estCents={pending.event.estCents} sessionCents={pending.event.sessionCents} capCents={pending.event.capCents} onDecide={onDecide} />
         )}
         {m.content && <div className="md">{m.content}</div>}
-        {m.streaming && !m.content && (
+        {m.streaming && !m.content && m.steps.length === 0 && (
           <div className="thinking">
-            <span className="skeleton__line skeleton" />
+            <Spinner size={16} />
+            <span>Thinking…</span>
           </div>
         )}
         {m.error && (
@@ -273,59 +423,25 @@ function Message({ m, onOpenRaw, pending, resolvedPerms, onDecide, cap, session 
   );
 }
 
-function EmptyState({ onPick }: { onPick: (text: string) => void }) {
+function AskBox({ value, onChange, onSend, disabled, autoFocus }: { value: string; onChange: (v: string) => void; onSend: () => void; disabled: boolean; autoFocus?: boolean }) {
   return (
-    <div className="empty">
-      <div className="empty__lede">Ask Ortha to find real-world data — it discovers the right tool live.</div>
-      <div className="empty__examples">
-        {EXAMPLES.map((ex) => (
-          <button key={ex} className="example" onClick={() => onPick(ex)}>
-            {ex}
-          </button>
-        ))}
-      </div>
-      <div className="nudge muted">Tip: add a provider key in Settings to use your own credits (BYOK).</div>
+    <div className="ask">
+      <textarea
+        className="ask__input"
+        value={value}
+        placeholder="Ask Ortha…"
+        rows={1}
+        autoFocus={autoFocus}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            onSend();
+          }
+        }}
+      />
+      <button className="ask__send" onClick={onSend} disabled={disabled} aria-label="Send">↑</button>
     </div>
-  );
-}
-
-function Composer({ value, onChange, onSend, disabled }: { value: string; onChange: (v: string) => void; onSend: () => void; disabled: boolean }) {
-  return (
-    <div className="composer">
-      <div className="composer__inner">
-        <textarea
-          className="composer__input"
-          value={value}
-          placeholder="Message Ortha…"
-          rows={1}
-          onChange={(e) => onChange(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              onSend();
-            }
-          }}
-        />
-        <button className="composer__send" onClick={onSend} disabled={disabled} aria-label="Send">
-          ↑
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function Select({ value, options, onChange, ariaLabel }: { value: string; options: string[]; onChange: (v: string) => void; ariaLabel: string }) {
-  return (
-    <span className="select model-select">
-      <select className="select" aria-label={ariaLabel} value={value} onChange={(e) => onChange(e.target.value)}>
-        {options.map((o) => (
-          <option key={o} value={o}>
-            {o}
-          </option>
-        ))}
-      </select>
-      <span className="select__caret caret">▾</span>
-    </span>
   );
 }
 

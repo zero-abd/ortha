@@ -70,3 +70,4 @@ desktop.ini
 
 # Misc
 *.local
+.gstack/

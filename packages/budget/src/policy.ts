@@ -13,9 +13,10 @@ import {
 
 /**
  * Settings the policy needs per workspace. A full `Settings` satisfies this, so
- * callers can pass `store.getSettings`. Only the two caps are read here.
+ * callers can pass `store.getSettings`. The two caps plus the per-call warn
+ * threshold are read here.
  */
-export type BudgetSettings = Pick<Settings, "sessionCapCents" | "monthlyCapCents">;
+export type BudgetSettings = Pick<Settings, "sessionCapCents" | "monthlyCapCents" | "perCallWarnCents">;
 
 /** The spend accounting port the policy delegates to. */
 export interface SpendStorePort {
@@ -75,7 +76,7 @@ export function createBudgetPolicy(deps: BudgetPolicyDeps): BudgetPolicy {
     ): Promise<BudgetDecision> {
       lastConversation.set(workspaceId, conversationId);
 
-      const { sessionCapCents } = await getSettings(workspaceId);
+      const { sessionCapCents, perCallWarnCents } = await getSettings(workspaceId);
       const workspaceRemainingCents = await store.remaining(workspaceId);
       const sessionSpentCents = await store.sessionSpent(conversationId);
 
@@ -86,6 +87,16 @@ export function createBudgetPolicy(deps: BudgetPolicyDeps): BudgetPolicy {
         return {
           decision: "denied",
           reason: `Estimated ${estimateCents}¢ exceeds the workspace's remaining ${workspaceRemainingCents}¢ this period.`,
+          ...base,
+        };
+      }
+
+      // Per-call warn: a single expensive call needs approval, even if it fits the
+      // session cap. Distinct reason from the session-cap check below.
+      if (perCallWarnCents > 0 && estimateCents >= perCallWarnCents) {
+        return {
+          decision: "permission_required",
+          reason: `This single call is estimated at ${estimateCents}¢, at/above your per-call warn threshold of ${perCallWarnCents}¢.`,
           ...base,
         };
       }

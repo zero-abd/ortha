@@ -43,3 +43,15 @@ export async function getSettings(): Promise<ApiSettings | null> {
 export async function putSettings(s: ApiSettings): Promise<void> {
   await fetch(`${API}/api/settings`, { method: "PUT", headers: headers(), body: JSON.stringify(s) });
 }
+
+export interface Conversation {
+  id: string;
+  title: string;
+  updatedAt: number;
+}
+
+export async function listConversations(): Promise<Conversation[]> {
+  const r = await fetch(`${API}/api/conversations`, { headers: headers() });
+  if (!r.ok) return [];
+  return ((await r.json()) as { conversations: Conversation[] }).conversations ?? [];
+}

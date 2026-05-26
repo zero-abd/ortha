@@ -1,7 +1,7 @@
 import { handleApi } from "./api.js";
 import { ConversationDO } from "./conversation-do.js";
 import type { Env } from "./env.js";
-import { CORS, json } from "./http.js";
+import { CORS, json, workspaceOf } from "./http.js";
 
 // The DO class must be exported from the Worker entry for the binding to resolve.
 export { ConversationDO };
@@ -24,6 +24,14 @@ export default {
     // BYOK keys + per-workspace settings.
     const api = await handleApi(request, env, url);
     if (api) return api;
+
+    // List this workspace's conversations (from the KV index the DO maintains).
+    if (url.pathname === "/api/conversations" && request.method === "GET") {
+      const ws = workspaceOf(request);
+      if (!ws) return json({ error: "missing or invalid x-ortha-workspace header" }, 400);
+      const raw = await env.KV.get(`conv-index:${ws}`);
+      return json({ conversations: raw ? JSON.parse(raw) : [] });
+    }
 
     // Mint a conversation id; the DO is created lazily on first /stream connect.
     if (url.pathname === "/api/conversations" && request.method === "POST") {

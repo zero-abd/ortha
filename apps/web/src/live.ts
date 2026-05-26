@@ -61,3 +61,27 @@ export function runLiveTurn(text: string, deps: LiveDeps, apiBase: string): Prom
     });
   });
 }
+
+/** Connect to a conversation's stream, grab its persisted history, and close. */
+export function fetchHistory(conversationId: string, apiBase: string): Promise<{ role: string; content: string }[]> {
+  return new Promise((resolve) => {
+    const wsBase = apiBase.replace(/^http/, "ws");
+    const wsId = encodeURIComponent(getWorkspaceId());
+    const ws = new WebSocket(`${wsBase}/api/conversations/${encodeURIComponent(conversationId)}/stream?ws=${wsId}`);
+    const finish = (msgs: { role: string; content: string }[]) => {
+      clearTimeout(timer);
+      try { ws.close(); } catch { /* noop */ }
+      resolve(msgs);
+    };
+    const timer = setTimeout(() => finish([]), 4000);
+    ws.addEventListener("message", (e) => {
+      try {
+        const ev = JSON.parse(typeof e.data === "string" ? e.data : "{}");
+        if (ev.type === "history") finish(ev.messages ?? []);
+      } catch {
+        /* ignore */
+      }
+    });
+    ws.addEventListener("error", () => finish([]));
+  });
+}

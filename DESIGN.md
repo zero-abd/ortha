@@ -3,38 +3,56 @@
 Source of truth for Ortha's UI. Every frontend agent builds to this. Locked via
 `/plan-design-review` (3/10 → 8/10). If you need to deviate, change THIS file first.
 
-Ortha is an **app console**, not a marketing page. Think Linear / Raycast / Claude
-Desktop craft: calm, dense-but-readable, minimal chrome. The product's wow is
+Ortha is an **app console**, not a marketing page. The product's wow is
 *transparency* — the user watches a real agent discover and call real tools — so the
-UI's job is to make that legible without burying the answer.
+UI's job is to make that legible without burying the answer. The look matches
+**Orthogonal's actual product**: clean, professional, calm — a light monochrome
+surface, hairline borders, thin icons, generous whitespace. No gradients, no glass,
+no aurora. (We tried that; it read as AI slop. This is the corrected direction.)
 
----
+### Layout (matches Orthogonal's app)
+- **Left sidebar** (`--sidebar`, 256px): logo + "Ortha" wordmark → account switcher →
+  **`+ New chat`** → **conversations list** ("Recent") → bottom: **session cost**,
+  "Get free credits ↗", and the **account button (avatar + name + ⚙) which opens
+  Settings**. Settings lives bottom-left with the account.
+- **Main** (white): minimal top bar (model picker · theme toggle · live cost meter
+  during a turn). Empty state = centered **"Welcome to Ortha"** + subtitle + large
+  **"Ask Ortha"** input + **categorized example cards** (Recruiting, Enrichment) that
+  showcase Orthogonal's catalog. In-conversation = message stream + inline agent-trace
+  + bottom Ask box.
 
 ## 1. Aesthetic
 
-Calm warm-neutral, Claude-adjacent. **Light and dark are both first-class** — design,
-build, and test both. Theme follows system by default with a manual toggle, persisted
-per user.
+Clean, **light-first** (the hero) with a fully-supported dark toggle. Calm monochrome:
+white canvas, near-black ink + primary, neutral grays, hairline borders. Theme follows
+system by default, manual toggle persisted per user. The only saturated color is a
+sparing `--accent` (indigo) for the active conversation, links, and the running
+trace/spinner — everything else is neutral.
 
 ### Color tokens
 
-Define as CSS variables. Never hardcode hex in components.
+CSS variables; never hardcode hex. `:root` is light (default); `:root[data-theme="dark"]`
+overrides.
 
-| Token | Light | Dark |
+| Token | Light (default) | Dark |
 |---|---|---|
-| `--canvas` | `#FAF9F7` | `#1A1A19` |
-| `--surface` | `#FFFFFF` | `#232321` |
-| `--surface-raised` (modal/panel) | `#FFFFFF` | `#2B2B28` |
-| `--ink` (primary text) | `#1A1A19` | `#F2F1EE` |
-| `--muted` (secondary text) | `#6B6B66` | `#9A9A93` |
-| `--hairline` (borders) | `#E7E5E1` | `#34332F` |
-| `--accent` (actions, active step) | `#C8643C` | `#E07A4F` |
-| `--accent-ink` (text on accent) | `#FFFFFF` | `#1A1A19` |
-| `--ok` (tool success) | `#3D8C5A` | `#5FB37C` |
-| `--warn` (cost 80%+) | `#B7791F` | `#E0A33C` |
-| `--danger` (failure, cost 100%) | `#C2453C` | `#E0655B` |
+| `--bg` (canvas) | `#FFFFFF` | `#0F0F11` |
+| `--sidebar` | `#FBFBFA` | `#131315` |
+| `--surface` / `--raised` | `#FFFFFF` | `#161618` / `#1C1C1F` |
+| `--ink` | `#18181B` | `#F4F4F5` |
+| `--muted` | `#71717A` | `#A1A1AA` |
+| `--hairline` | `#ECECEB` | `#262629` |
+| `--primary` (buttons/send/active) | `#18181B` | `#F4F4F5` |
+| `--accent` (sparing: links/active/spinner) | `#4F46E5` | `#818CF8` |
+| `--ok` / `--warn` / `--danger` | `#16A34A` / `#D97706` / `#DC2626` | brightened |
 
-Contrast: all body text ≥ 4.5:1 against its background in **both** themes.
+Contrast: all body text ≥ 4.5:1 in **both** themes.
+
+### Logo
+Code-only inline SVG (`components/Logo.tsx`): the real Orthogonal mark — **two opposite
+pie slices** (top-right + bottom-left quarter wedges) on a light rounded tile, black
+mark. Solid-ink "Ortha" wordmark (no gradient). The same two-slice geometry, accent-
+colored and rotating, is the loading spinner.
 
 ### Typography
 

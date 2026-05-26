@@ -6,7 +6,8 @@ import {
   type OrthogonalClient,
   type WorkspaceId,
 } from "@ortha/contracts";
-import { createBudgetPolicy, InMemorySpendStore } from "@ortha/budget";
+import { createBudgetPolicy, InMemorySpendStore, type SpendStorePort } from "@ortha/budget";
+import { DEFAULT_SETTINGS } from "@ortha/db";
 import { createMemoryStore, mapKvPort, type ConvSummaryState } from "@ortha/context";
 import { createOrthogonalClient, distill } from "@ortha/harness";
 import { createAnthropicProvider, createOpenAICompatProvider, defaultModelRegistry } from "@ortha/llm";
@@ -32,14 +33,20 @@ const BASE_URLS: Record<"openai" | "openrouter" | "gemini", string> = {
  * keys aren't configured (or anything fails), so the DO falls back to demo mode —
  * a deploy can never break, and no spend happens without the user's own keys.
  */
-export async function buildLivePorts(env: Env, ws: WorkspaceId): Promise<AgentPorts | null> {
+export async function buildLivePorts(
+  env: Env,
+  ws: WorkspaceId,
+  spendStore?: SpendStorePort,
+): Promise<AgentPorts | null> {
   const vault = await createKeyVault({ masterKeyBase64: env.KEY_ENCRYPTION_KEY, store: kvStore(env.KV) });
 
   const orthoKey = await vault.getKey(ws, "orthogonal");
   if (!orthoKey) return null;
 
   const rawSettings = await env.KV.get(`settings:${ws}`);
-  const settings = rawSettings ? (JSON.parse(rawSettings) as Partial<{ model: string; sessionCapCents: number; monthlyCapCents: number }>) : {};
+  const settings = rawSettings
+    ? (JSON.parse(rawSettings) as Partial<{ model: string; sessionCapCents: number; monthlyCapCents: number; perCallWarnCents: number }>)
+    : {};
   const model = settings.model ?? defaultModelRegistry.defaultModelId();
   const info = defaultModelRegistry.get(model);
   if (!info) return null;
@@ -55,9 +62,14 @@ export async function buildLivePorts(env: Env, ws: WorkspaceId): Promise<AgentPo
   }
 
   const orthogonal = createOrthogonalClient({ getApiKey: async () => orthoKey });
+  const sessionCapCents = settings.sessionCapCents ?? DEFAULT_SETTINGS.sessionCapCents;
+  const monthlyCapCents = settings.monthlyCapCents ?? DEFAULT_SETTINGS.monthlyCapCents;
+  const perCallWarnCents = settings.perCallWarnCents ?? DEFAULT_SETTINGS.perCallWarnCents;
+  // Durable store (D1 + DO SQLite) when the DO supplies one; else an in-memory
+  // store seeded with the monthly cap so `remaining()` is correct from the start.
   const budget = createBudgetPolicy({
-    store: new InMemorySpendStore(),
-    settings: { sessionCapCents: settings.sessionCapCents ?? 50, monthlyCapCents: settings.monthlyCapCents ?? 10_000 },
+    store: spendStore ?? new InMemorySpendStore(() => monthlyCapCents),
+    settings: { sessionCapCents, monthlyCapCents, perCallWarnCents },
   });
   const memory = createMemoryStore({
     rawStore: mapKvPort<unknown>(),

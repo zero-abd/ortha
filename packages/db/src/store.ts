@@ -35,7 +35,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sessionCapCents: 500,
   perCallWarnCents: 25,
   monthlyCapCents: 10_000,
-  model: "gpt-4o-mini",
+  model: "gemini-2.0-flash",
   theme: "system",
   cacheTtlSeconds: 300,
 };
