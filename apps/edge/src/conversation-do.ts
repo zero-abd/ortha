@@ -7,12 +7,13 @@ import {
   type PermissionResponse,
   type WorkspaceId,
 } from "@ortha/contracts";
-import { applySchema, createStore, type SqlDb } from "@ortha/db";
+import { applySchema, createStore, d1Adapter, DEFAULT_SETTINGS, type SqlDb } from "@ortha/db";
 import type { ConversationStore } from "@ortha/contracts";
 import { createDemoPorts } from "./demo.js";
 import { doSqlAdapter } from "./do-sql.js";
 import type { Env } from "./env.js";
 import { buildLivePorts } from "./ports.js";
+import { DurableSpendStore, SESSION_SPEND_DDL, WORKSPACE_SPEND_DDL } from "./spend-store.js";
 
 const DEMO_WS: WorkspaceId = asWorkspaceId("demo-ws");
 const HISTORY_BUDGET_TOKENS = 8_000;
@@ -72,7 +73,13 @@ export class ConversationDO implements DurableObject {
 
   private async init(): Promise<void> {
     if (this.initialized) return;
-    await this.ctx.blockConcurrencyWhile(async () => applySchema(this.db));
+    await this.ctx.blockConcurrencyWhile(async () => {
+      applySchema(this.db);
+      // DO-local per-conversation session spend (accumulates across turns).
+      this.db.run(SESSION_SPEND_DDL);
+      // D1 cross-conversation workspace monthly spend.
+      await d1Adapter(this.env.DB).run(WORKSPACE_SPEND_DDL);
+    });
     this.initialized = true;
   }
 
@@ -130,6 +137,20 @@ export class ConversationDO implements DurableObject {
     await this.env.KV.put(key, JSON.stringify(list));
   }
 
+  /** Read the workspace's monthly cap from KV settings (same key buildLivePorts uses). */
+  private async resolveMonthlyCapCents(): Promise<number> {
+    try {
+      const raw = await this.env.KV.get(`settings:${this.workspaceId}`);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<{ monthlyCapCents: number }>;
+        if (typeof parsed.monthlyCapCents === "number") return parsed.monthlyCapCents;
+      }
+    } catch {
+      /* fall through to default */
+    }
+    return DEFAULT_SETTINGS.monthlyCapCents;
+  }
+
   private async runTurn(ws: WebSocket, text: string): Promise<void> {
     await this.init();
     await this.store.appendMessage({ conversationId: this.conversationId, role: "user", content: text });
@@ -138,8 +159,17 @@ export class ConversationDO implements DurableObject {
     const history = await this.store.loadWindow(this.conversationId, HISTORY_BUDGET_TOKENS);
     const messages: LLMMessage[] = history.map((m) => ({ role: m.role, content: m.content }));
 
+    // Durable spend store: workspace monthly spend in D1, session spend in this DO's
+    // SQLite. Seeded with the workspace's monthly cap so `remaining()` is correct.
+    const monthlyCapCents = await this.resolveMonthlyCapCents();
+    const spendStore = new DurableSpendStore({
+      d1: d1Adapter(this.env.DB),
+      doSql: this.db,
+      monthlyCapCents,
+    });
+
     // Live ports when this workspace has BYOK keys configured; demo otherwise.
-    const live = await buildLivePorts(this.env, this.workspaceId).catch(() => null);
+    const live = await buildLivePorts(this.env, this.workspaceId, spendStore).catch(() => null);
     const ports = live ?? { ...createDemoPorts(), model: "demo" };
     const deps: AgentDeps = {
       llm: ports.llm,

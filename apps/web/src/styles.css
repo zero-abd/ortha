@@ -201,6 +201,7 @@ input, textarea, select { font: inherit; color: inherit; }
 .cost__fill--warn { background: var(--warn); }
 .cost__fill--danger { background: var(--danger); }
 .cost__compact { font-size: 12px; }
+.cost__demo { font-size: 11.5px; color: var(--muted); letter-spacing: 0.01em; }
 .popover { position: absolute; top: 120%; right: 0; min-width: 220px; background: var(--raised); border: 1px solid var(--hairline-strong); border-radius: var(--radius); box-shadow: var(--shadow-pop); padding: 10px; z-index: 30; }
 .breakdown { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
 .breakdown__row { display: flex; justify-content: space-between; gap: 16px; padding: 3px 4px; }
@@ -247,11 +248,15 @@ input:focus, textarea:focus { outline: none; border-color: var(--ink-soft); }
 .modal__detail { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
 .modal__actions { display: flex; justify-content: flex-end; gap: 10px; }
 .settings { width: 100%; max-width: 560px; max-height: 86vh; display: flex; flex-direction: column; background: var(--raised); border: 1px solid var(--hairline-strong); border-radius: var(--radius); box-shadow: var(--shadow-pop); overflow: hidden; }
+.settings--lg { max-width: 900px; height: 80vh; max-height: 80vh; }
 .settings__head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 16px 18px; border-bottom: 1px solid var(--hairline); }
 .settings__title { font-size: 15px; font-weight: 600; }
-.settings__body { padding: 18px; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; }
-.settings__section { display: flex; flex-direction: column; gap: 8px; }
+.settings__body { padding: 22px 26px; overflow-y: auto; display: flex; flex-direction: column; gap: 22px; flex: 1; }
+.settings__foot { display: flex; justify-content: flex-end; gap: 10px; padding: 14px 26px; border-top: 1px solid var(--hairline); }
+.settings__section { display: flex; flex-direction: column; gap: 10px; }
 .settings__label { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--faint); }
+.settings__sublabel { font-size: 13px; font-weight: 500; color: var(--ink-soft); }
+.settings__help { font-size: 12.5px; color: var(--muted); line-height: 1.45; }
 .settings__row { display: flex; gap: 10px; }
 .settings__row > * { flex: 1; }
 .settings__divider { height: 1px; background: var(--hairline); margin: 2px 0; }

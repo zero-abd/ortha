@@ -1,24 +1,15 @@
 import { useEffect, useState } from "react";
 import { deleteKey, getSettings, listKeys, putKey, putSettings, type ApiSettings, type KeyMeta } from "../lib/api.ts";
+import { PROVIDERS, defaultModelOf, providerOfModel } from "../lib/providers.ts";
 import { Dropdown } from "./Dropdown.tsx";
 
-const PROVIDERS = [
+const KEY_PROVIDERS = [
   { id: "orthogonal", label: "Orthogonal API key", placeholder: "orth_live_…" },
   { id: "gemini", label: "Google Gemini key", placeholder: "AIza… (free tier)" },
   { id: "openrouter", label: "OpenRouter key", placeholder: "sk-or-… (free models)" },
   { id: "openai", label: "OpenAI key", placeholder: "sk-…" },
   { id: "anthropic", label: "Anthropic key", placeholder: "sk-ant-…" },
 ] as const;
-
-const MODELS = [
-  { id: "gemini-2.0-flash", label: "Gemini 2.0 Flash (free)" },
-  { id: "gemini-1.5-flash", label: "Gemini 1.5 Flash (free)" },
-  { id: "meta-llama/llama-3.3-70b-instruct:free", label: "Llama 3.3 70B · OpenRouter (free)" },
-  { id: "gpt-4o-mini", label: "GPT-4o mini" },
-  { id: "gpt-4o", label: "GPT-4o" },
-  { id: "claude-3-5-haiku-latest", label: "Claude 3.5 Haiku" },
-  { id: "claude-3-5-sonnet-latest", label: "Claude 3.5 Sonnet" },
-];
 
 const DEFAULTS: ApiSettings = {
   sessionCapCents: 500,
@@ -29,7 +20,10 @@ const DEFAULTS: ApiSettings = {
   cacheTtlSeconds: 300,
 };
 
-export function SettingsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+const toDollars = (cents: number): string => (cents / 100).toString();
+const toCents = (dollars: string): number => Math.max(0, Math.round(Number(dollars) * 100));
+
+export function SettingsModal({ open, onClose, onSaved }: { open: boolean; onClose: () => void; onSaved?: (s: ApiSettings) => void }) {
   const [keys, setKeys] = useState<KeyMeta[]>([]);
   const [settings, setSettings] = useState<ApiSettings>(DEFAULTS);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -50,6 +44,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   if (!open) return null;
 
   const active = (provider: string) => keys.find((k) => k.provider === provider && k.status === "active");
+  const currentProvider = providerOfModel(settings.model);
 
   const saveKey = async (provider: string) => {
     const v = drafts[provider]?.trim();
@@ -71,48 +66,84 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
     await putSettings(settings);
     setBusy(false);
     setSaved(true);
+    onSaved?.(settings);
     setTimeout(() => setSaved(false), 1600);
   };
 
   return (
     <div className="settings-scrim" onClick={onClose}>
-      <div className="settings" role="dialog" aria-modal="true" aria-label="Settings" onClick={(e) => e.stopPropagation()}>
+      <div className="settings settings--lg" role="dialog" aria-modal="true" aria-label="Settings" onClick={(e) => e.stopPropagation()}>
         <div className="settings__head">
           <span className="settings__title">Settings · BYOK</span>
           <button className="iconbtn" onClick={onClose} aria-label="Close settings">✕</button>
         </div>
 
         <div className="settings__body">
+          {/* ── Model & provider ─────────────────────────────────────── */}
           <div className="settings__section">
-            <span className="settings__label">Model</span>
+            <span className="settings__label">Model &amp; provider</span>
             <Dropdown
-              value={settings.model}
-              options={MODELS.map((m) => ({ value: m.id, label: m.label }))}
-              onChange={(v) => setSettings((s) => ({ ...s, model: v }))}
-              ariaLabel="Model"
+              value={currentProvider}
+              options={PROVIDERS.map((p) => ({ value: p.id, label: p.label }))}
+              onChange={(v) => setSettings((s) => ({ ...s, model: defaultModelOf(v) }))}
+              ariaLabel="Provider"
               block
             />
-            <div className="settings__row">
-              <div className="field">
-                <span className="settings__label">Session cap ($)</span>
-                <input className="input" type="number" min={0} step="0.25" value={(settings.sessionCapCents / 100).toString()} onChange={(e) => setSettings((s) => ({ ...s, sessionCapCents: Math.round(Number(e.target.value) * 100) }))} />
-              </div>
-              <div className="field">
-                <span className="settings__label">Monthly cap ($)</span>
-                <input className="input" type="number" min={0} step="1" value={(settings.monthlyCapCents / 100).toString()} onChange={(e) => setSettings((s) => ({ ...s, monthlyCapCents: Math.round(Number(e.target.value) * 100) }))} />
-              </div>
-            </div>
-            <button className="btn-sm btn-sm--accent" disabled={busy} onClick={saveSettings}>{saved ? "Saved ✓" : "Save model + caps"}</button>
+            <span className="settings__help">Default model: <span className="mono">{defaultModelOf(currentProvider)}</span></span>
           </div>
 
           <div className="settings__divider" />
 
+          {/* ── Spending limits ──────────────────────────────────────── */}
+          <div className="settings__section">
+            <span className="settings__label">Spending limits</span>
+            <div className="field">
+              <span className="settings__sublabel">Session cap ($)</span>
+              <input
+                className="input"
+                type="number"
+                min={0}
+                step="0.25"
+                value={toDollars(settings.sessionCapCents)}
+                onChange={(e) => setSettings((s) => ({ ...s, sessionCapCents: toCents(e.target.value) }))}
+              />
+              <span className="settings__help">Max spend per conversation before Ortha pauses to ask permission.</span>
+            </div>
+            <div className="field">
+              <span className="settings__sublabel">Per-call warn ($)</span>
+              <input
+                className="input"
+                type="number"
+                min={0}
+                step="0.01"
+                value={toDollars(settings.perCallWarnCents)}
+                onChange={(e) => setSettings((s) => ({ ...s, perCallWarnCents: toCents(e.target.value) }))}
+              />
+              <span className="settings__help">Ask before any single tool call priced at or above this amount.</span>
+            </div>
+            <div className="field">
+              <span className="settings__sublabel">Monthly cap ($)</span>
+              <input
+                className="input"
+                type="number"
+                min={0}
+                step="1"
+                value={toDollars(settings.monthlyCapCents)}
+                onChange={(e) => setSettings((s) => ({ ...s, monthlyCapCents: toCents(e.target.value) }))}
+              />
+              <span className="settings__help">Hard ceiling across every conversation this month. Ortha stops when reached.</span>
+            </div>
+          </div>
+
+          <div className="settings__divider" />
+
+          {/* ── Provider keys ────────────────────────────────────────── */}
           <div className="settings__section">
             <span className="settings__label">Provider keys</span>
             <span className="muted" style={{ fontSize: 12.5 }}>
               Bring your own keys — encrypted at rest, never shown again. Live mode needs an Orthogonal key + a key for your selected model's provider. No keys = safe demo mode.
             </span>
-            {PROVIDERS.map((p) => {
+            {KEY_PROVIDERS.map((p) => {
               const set = active(p.id);
               return (
                 <div className="field" key={p.id}>
@@ -128,6 +159,10 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
               );
             })}
           </div>
+        </div>
+
+        <div className="settings__foot">
+          <button className="btn-sm btn-sm--accent" disabled={busy} onClick={saveSettings}>{saved ? "Saved ✓" : "Save settings"}</button>
         </div>
       </div>
     </div>

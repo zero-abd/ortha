@@ -14,7 +14,9 @@ import { InMemorySpendStore } from "../src/store.js";
 const WS = asWorkspaceId("ws_1");
 const CONV = asConversationId("conv_1");
 
-const SETTINGS: BudgetSettings = { sessionCapCents: 100, monthlyCapCents: 1000 };
+// perCallWarnCents: 0 disables the per-call warn for the baseline suite, isolating
+// the session/workspace-cap behaviour the existing tests assert.
+const SETTINGS: BudgetSettings = { sessionCapCents: 100, monthlyCapCents: 1000, perCallWarnCents: 0 };
 
 function setup(settings: BudgetSettings = SETTINGS) {
   const store = new InMemorySpendStore((_ws: WorkspaceId) => settings.monthlyCapCents);
@@ -66,6 +68,63 @@ describe("checkEstimate", () => {
 
   it("treats exactly hitting the session cap as ok (strict > only)", async () => {
     const d = await env.policy.checkEstimate(WS, CONV, 100); // 0 + 100 == 100, not > 100
+    expect(d.decision).toBe("ok");
+  });
+});
+
+describe("per-call warn threshold", () => {
+  // sessionCap 1000 so the session cap never fires; isolate the per-call warn.
+  const WARN: BudgetSettings = { sessionCapCents: 1000, monthlyCapCents: 10_000, perCallWarnCents: 25 };
+  function warnEnv() {
+    const store = new InMemorySpendStore((_ws: WorkspaceId) => WARN.monthlyCapCents);
+    const policy = createBudgetPolicy({ store, settings: WARN });
+    return { store, policy };
+  }
+
+  it("requires permission for a single call at/above the per-call warn threshold, even under the session cap", async () => {
+    const { policy } = warnEnv();
+    const d = await policy.checkEstimate(WS, CONV, 30); // 30 >= 25 warn, 30 < 1000 session
+    expect(d.decision).toBe("permission_required");
+    expect(d.reason).toContain("per-call warn threshold");
+  });
+
+  it("triggers exactly at the threshold (>=, not strictly >)", async () => {
+    const { policy } = warnEnv();
+    const d = await policy.checkEstimate(WS, CONV, 25); // 25 >= 25
+    expect(d.decision).toBe("permission_required");
+    expect(d.reason).toContain("per-call warn threshold");
+  });
+
+  it("stays 'ok' for a call below the threshold and under the session cap", async () => {
+    const { policy } = warnEnv();
+    const d = await policy.checkEstimate(WS, CONV, 24); // 24 < 25, under session cap
+    expect(d.decision).toBe("ok");
+  });
+
+  it("uses the distinct session-cap reason when only the session cap is crossed", async () => {
+    // perCallWarn high enough that the single call doesn't warn, but session cap is tiny.
+    const settings: BudgetSettings = { sessionCapCents: 20, monthlyCapCents: 10_000, perCallWarnCents: 1000 };
+    const store = new InMemorySpendStore((_ws: WorkspaceId) => settings.monthlyCapCents);
+    const policy = createBudgetPolicy({ store, settings });
+    const d = await policy.checkEstimate(WS, CONV, 30); // 30 < 1000 warn, but 0+30 > 20 session
+    expect(d.decision).toBe("permission_required");
+    expect(d.reason).toContain("session cap");
+    expect(d.reason).not.toContain("per-call warn threshold");
+  });
+
+  it("a per-call-warn estimate over the workspace cap is still denied (hard ceiling wins)", async () => {
+    const settings: BudgetSettings = { sessionCapCents: 1000, monthlyCapCents: 100, perCallWarnCents: 25 };
+    const store = new InMemorySpendStore((_ws: WorkspaceId) => settings.monthlyCapCents);
+    const policy = createBudgetPolicy({ store, settings });
+    const d = await policy.checkEstimate(WS, CONV, 200); // 200 >= 25 warn, but 200 > 100 ws
+    expect(d.decision).toBe("denied");
+  });
+
+  it("perCallWarnCents = 0 disables the warn entirely", async () => {
+    const settings: BudgetSettings = { sessionCapCents: 1000, monthlyCapCents: 10_000, perCallWarnCents: 0 };
+    const store = new InMemorySpendStore((_ws: WorkspaceId) => settings.monthlyCapCents);
+    const policy = createBudgetPolicy({ store, settings });
+    const d = await policy.checkEstimate(WS, CONV, 500); // big single call, but warn disabled
     expect(d.decision).toBe("ok");
   });
 });
@@ -175,8 +234,8 @@ describe("refund", () => {
 describe("settings as a getter", () => {
   it("accepts a per-workspace getSettings function", async () => {
     const perWs: Record<string, BudgetSettings> = {
-      ws_a: { sessionCapCents: 10, monthlyCapCents: 100 },
-      ws_b: { sessionCapCents: 50, monthlyCapCents: 500 },
+      ws_a: { sessionCapCents: 10, monthlyCapCents: 100, perCallWarnCents: 0 },
+      ws_b: { sessionCapCents: 50, monthlyCapCents: 500, perCallWarnCents: 0 },
     };
     const get = (ws: WorkspaceId): BudgetSettings => perWs[ws] ?? SETTINGS;
     const store = new InMemorySpendStore((ws: WorkspaceId) => get(ws).monthlyCapCents);
