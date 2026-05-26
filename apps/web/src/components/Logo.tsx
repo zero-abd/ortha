@@ -2,16 +2,17 @@
 // cuts into a large sector + a detached quarter wedge. The same geometry powers the
 // spinning loader (the disc revolves, Omnitrix-style). No image assets.
 
-// Big ~260° sector (gaps left near the east + north axes — the orthogonal cuts).
-const SECTOR = "M16 16 L26.99 16.38 A11 11 0 1 1 14.47 5.11 Z";
-// Detached NE quarter wedge, nudged out along the diagonal.
-const WEDGE = "M16 16 L17.53 5.11 A11 11 0 0 1 26.89 14.47 Z";
+// Clean 270° disc with the top-right (NE) quadrant removed — the pac-man body.
+const SECTOR = "M16 16 L26 16 A10 10 0 1 1 16 6 Z";
+// The removed NE quarter (90°) as a separate wedge, apex at center.
+const WEDGE = "M16 16 L16 6 A10 10 0 0 1 26 16 Z";
 
 function Mark({ fill }: { fill: string }) {
   return (
     <g>
       <path d={SECTOR} fill={fill} />
-      <g transform="translate(1.25 -1.25)">
+      {/* the quarter pulled out, up and to the right (thin clean gap) */}
+      <g transform="translate(1.6 -1.6)">
         <path d={WEDGE} fill={fill} />
       </g>
     </g>
