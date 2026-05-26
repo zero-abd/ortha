@@ -22,6 +22,91 @@ export function mapKvPort<V>(backing: Map<string, V> = new Map()): KvPort<V> {
   };
 }
 
+/**
+ * Default cap (in bytes of UTF-8 JSON) for a single raw value. Live tool results
+ * measured at 173 KB–412 KB; anything over this is replaced by a truncated marker
+ * so the durable store never holds or persists multi-hundred-KB blobs.
+ */
+export const DEFAULT_RAW_CAP_BYTES = 256 * 1024;
+
+/** How many bytes of the original JSON to keep as a human-readable preview. */
+const TRUNCATED_PREVIEW_BYTES = 2 * 1024;
+
+/**
+ * Marker persisted in place of an oversized value. `get` returns this object
+ * verbatim (it is itself small), so a cross-turn `expand_result` sees that the
+ * blob existed, how big it was, and a leading slice of it — instead of OOMing.
+ */
+export interface TruncatedBlob {
+  readonly _truncated: true;
+  /** Byte length of the original (un-truncated) serialized value. */
+  readonly bytes: number;
+  /** First ~2 KB of the original JSON string. */
+  readonly preview: string;
+}
+
+/** Type guard for the truncated marker. */
+export function isTruncatedBlob(value: unknown): value is TruncatedBlob {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { _truncated?: unknown })._truncated === true
+  );
+}
+
+/**
+ * The minimal row backend a {@link createCappedKvStore} needs: store/fetch a JSON
+ * string (plus its byte size) by key. Sync or async — a Map in tests, the
+ * Conversation DO's SQLite in prod (see apps/edge/src/raw-store.ts). Decoupled from
+ * any SQL type so @ortha/context stays dependency-free and unit-testable.
+ */
+export interface RawBlobBackend {
+  getJson(key: string): Promise<string | null> | string | null;
+  putJson(key: string, json: string, bytes: number): Promise<void> | void;
+}
+
+/** UTF-8 byte length of a string, without allocating a Buffer/TextEncoder per call when possible. */
+const encoder = new TextEncoder();
+function byteLength(s: string): number {
+  return encoder.encode(s).length;
+}
+
+/**
+ * A durable, SIZE-CAPPED {@link KvPort}. `put` JSON-stringifies the value and, if
+ * the serialized form exceeds `capBytes`, persists a small {@link TruncatedBlob}
+ * marker instead of the full blob — bounding memory and storage. `get` parses the
+ * stored JSON back (the marker round-trips as a plain object). Backed by any
+ * {@link RawBlobBackend}, so the same capping logic fronts a Map (tests) or DO
+ * SQLite (prod) without duplication.
+ */
+export function createCappedKvStore(
+  backend: RawBlobBackend,
+  capBytes: number = DEFAULT_RAW_CAP_BYTES,
+): KvPort<unknown> {
+  return {
+    async put(key, value) {
+      const json = JSON.stringify(value ?? null);
+      const bytes = byteLength(json);
+      if (bytes > capBytes) {
+        const marker: TruncatedBlob = {
+          _truncated: true,
+          bytes,
+          preview: json.slice(0, TRUNCATED_PREVIEW_BYTES),
+        };
+        const markerJson = JSON.stringify(marker);
+        await backend.putJson(key, markerJson, byteLength(markerJson));
+        return;
+      }
+      await backend.putJson(key, json, bytes);
+    },
+    async get(key) {
+      const json = await backend.getJson(key);
+      if (json == null) return null;
+      return JSON.parse(json) as unknown;
+    },
+  };
+}
+
 export interface CreateMemoryStoreDeps {
   /** Out-of-context raw tool results, keyed by requestId. */
   readonly rawStore: KvPort<unknown>;

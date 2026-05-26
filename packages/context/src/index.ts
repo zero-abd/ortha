@@ -5,9 +5,14 @@
 export {
   createMemoryStore,
   mapKvPort,
+  createCappedKvStore,
+  isTruncatedBlob,
+  DEFAULT_RAW_CAP_BYTES,
   type CreateMemoryStoreDeps,
   type ConvSummaryState,
   type KvPort,
+  type RawBlobBackend,
+  type TruncatedBlob,
 } from "./store.js";
 export { buildContextWindow, type BuildContextWindowInput } from "./budget.js";
 export { rankByOverlap, overlapScore, tokenize } from "./retrieval.js";

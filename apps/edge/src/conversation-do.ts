@@ -13,6 +13,7 @@ import { createDemoPorts } from "./demo.js";
 import { doSqlAdapter } from "./do-sql.js";
 import type { Env } from "./env.js";
 import { buildLivePorts } from "./ports.js";
+import { createSqlRawStore, RAW_BLOBS_DDL } from "./raw-store.js";
 import { DurableSpendStore, SESSION_SPEND_DDL, WORKSPACE_SPEND_DDL } from "./spend-store.js";
 
 const DEMO_WS: WorkspaceId = asWorkspaceId("demo-ws");
@@ -77,6 +78,8 @@ export class ConversationDO implements DurableObject {
       applySchema(this.db);
       // DO-local per-conversation session spend (accumulates across turns).
       this.db.run(SESSION_SPEND_DDL);
+      // DO-local durable, size-capped raw tool-result blobs (cross-turn expand_result).
+      this.db.run(RAW_BLOBS_DDL);
       // D1 cross-conversation workspace monthly spend.
       await d1Adapter(this.env.DB).run(WORKSPACE_SPEND_DDL);
     });
@@ -167,9 +170,12 @@ export class ConversationDO implements DurableObject {
       doSql: this.db,
       monthlyCapCents,
     });
+    // Durable, size-capped raw-result store backed by this DO's SQLite, so raw tool
+    // results survive across turns (expand_result) and oversized blobs are truncated.
+    const rawStore = createSqlRawStore(this.db);
 
     // Live ports when this workspace has BYOK keys configured; demo otherwise.
-    const live = await buildLivePorts(this.env, this.workspaceId, spendStore).catch(() => null);
+    const live = await buildLivePorts(this.env, this.workspaceId, spendStore, rawStore).catch(() => null);
     const ports = live ?? { ...createDemoPorts(), model: "demo" };
     const deps: AgentDeps = {
       llm: ports.llm,
