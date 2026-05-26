@@ -63,6 +63,7 @@ export function makeMockOrthogonalClient(
         inputSchema: { type: "object", properties: { email: { type: "string" } } },
         outputSchema: null,
         priceCents: 3,
+        hasDynamicPricing: false,
         verified: true,
         sideEffect: "read",
       };
@@ -76,11 +77,12 @@ export function makeMockOrthogonalClient(
       };
     },
     async estimateCost(plan): Promise<CostEstimate> {
-      const breakdown = plan.map((s) => ({ api: s.api, path: s.path, cents: 3 * s.expectedCalls }));
+      const breakdown = plan.map((s) => ({ api: s.api, path: s.path, cents: 3 * s.expectedCalls, dynamic: false }));
       return {
         estimatedCents: breakdown.reduce((a, b) => a + b.cents, 0),
         breakdown,
         hasUnknownPrices: false,
+        hasDynamicPricing: false,
       };
     },
   };

@@ -36,6 +36,7 @@ describe("search + estimateCost", () => {
     const est = await client.estimateCost([{ api: "apollo", path: "/v1/people/match", expectedCalls: 2 }]);
     expect(est.estimatedCents).toBe(6); // 0.03 * 100 * 2
     expect(est.hasUnknownPrices).toBe(false);
+    expect(est.hasDynamicPricing).toBe(false); // static price until a /details says otherwise
   });
 
   it("flags unknown prices for un-indexed endpoints", async () => {
@@ -67,6 +68,43 @@ describe("run", () => {
     const r = await client.run({ api: "apollo", path: "/v1/people/match", body: { email: "a@b.com" }, idempotencyKey: KEY });
     expect(r.priceCents).toBe(3);
     expect(r.requestId).toBe("run_abc");
+  });
+
+  it("maps 422 to BAD_REQUEST, lifts the structured upstream error, and marks it not-billed", async () => {
+    const client = createOrthogonalClient({
+      getApiKey: apiKey,
+      fetchImpl: async () => jsonResponse({ success: false, error: "email is required" }, 422),
+    });
+    const err = await client.run({ api: "apollo", path: "/p", idempotencyKey: KEY }).catch((e) => e);
+    expect(isOrthaError(err) && err.code).toBe(ErrorCode.BAD_REQUEST);
+    expect(isOrthaError(err) && err.message).toContain("email is required"); // structured body lifted, not raw JSON
+    expect(isOrthaError(err) && err.maybeBilled).toBe(false); // 4xx rejected before the paid call ran
+  });
+
+  it("flags a 5xx paid-run failure as maybeBilled (ambiguous — needs reconciliation)", async () => {
+    const client = createOrthogonalClient({
+      getApiKey: apiKey,
+      maxRetries: 0,
+      fetchImpl: async () => jsonResponse({ error: "boom" }, 503),
+    });
+    const err = await client.run({ api: "apollo", path: "/p", idempotencyKey: KEY }).catch((e) => e);
+    expect(isOrthaError(err) && err.code).toBe(ErrorCode.PROVIDER_DOWN);
+    expect(isOrthaError(err) && err.maybeBilled).toBe(true);
+  });
+
+  it("flags a timed-out paid run as maybeBilled, a normal 4xx as not", async () => {
+    const timeoutClient = createOrthogonalClient({
+      getApiKey: apiKey,
+      maxRetries: 0,
+      fetchImpl: async () => {
+        const e = new Error("aborted");
+        e.name = "AbortError";
+        throw e;
+      },
+    });
+    const timeoutErr = await timeoutClient.run({ api: "apollo", path: "/p", idempotencyKey: KEY }).catch((e) => e);
+    expect(isOrthaError(timeoutErr) && timeoutErr.code).toBe(ErrorCode.TIMEOUT);
+    expect(isOrthaError(timeoutErr) && timeoutErr.maybeBilled).toBe(true);
   });
 
   it("maps 402 to INSUFFICIENT_CREDITS and does not retry", async () => {
@@ -272,6 +310,7 @@ describe("real Orthogonal wire shapes", () => {
     expect(d.priceCents).toBe(3); // 0.03 dollars -> 3 cents
     expect(d.sideEffect).toBe("read"); // GET
     expect(d.verified).toBe(true);
+    expect(d.hasDynamicPricing).toBe(false); // REAL_DETAILS marks this endpoint static
     expect(d.inputSchema).not.toBeNull();
     // The details lookup indexed the price, so estimateCost can now price it.
     const est = await client.estimateCost([{ api: "context-dev", path: "/web/scrape/markdown", expectedCalls: 2 }]);
@@ -289,6 +328,28 @@ describe("real Orthogonal wire shapes", () => {
     const d = await client.getDetails("serper-scrape", "/");
     expect(d.sideEffect).toBe("write");
     expect(d.priceCents).toBe(2);
+  });
+
+  it("surfaces dynamic pricing so estimateCost treats the price as a floor", async () => {
+    // tavily-style endpoint: advertised price is a floor; real charge can be higher.
+    const dynamicDetails = {
+      success: true,
+      api: { slug: "tavily", verified: true },
+      endpoint: {
+        path: "/search",
+        method: "POST",
+        price: 0.01,
+        hasDynamicPricing: true,
+        bodyParams: [{ name: "query", type: "string", required: true }],
+      },
+    };
+    const client = createOrthogonalClient({ getApiKey: apiKey, fetchImpl: async () => jsonResponse(dynamicDetails) });
+    const d = await client.getDetails("tavily", "/search");
+    expect(d.hasDynamicPricing).toBe(true);
+    // The details lookup indexed the dynamic flag, so the run-time estimate is a floor.
+    const est = await client.estimateCost([{ api: "tavily", path: "/search", expectedCalls: 1 }]);
+    expect(est.hasDynamicPricing).toBe(true);
+    expect(est.breakdown[0]?.dynamic).toBe(true);
   });
 
   it("run validates the live success envelope", async () => {
@@ -316,6 +377,26 @@ describe("real Orthogonal wire shapes", () => {
     expect(calledUrl).toContain("/run");
   });
 
+  it("coerces numeric query params to strings before the paid call (gateway rejects numbers)", async () => {
+    let sentBody: { query?: Record<string, unknown> } = {};
+    const client = createOrthogonalClient({
+      getApiKey: apiKey,
+      fetchImpl: async (_url, init) => {
+        sentBody = JSON.parse(String(init?.body ?? "{}"));
+        return jsonResponse(REAL_RUN);
+      },
+    });
+    // A direct caller (or loose LLM args) passes numbers; the harness must stringify them
+    // so the gateway doesn't reject the (paid, non-retried) call. dome start_time/limit case.
+    await client.run({
+      api: "dome",
+      path: "/candles",
+      query: { start_time: 1_700_000_000, limit: 100 } as unknown as Record<string, string>,
+      idempotencyKey: KEY,
+    });
+    expect(sentBody.query).toEqual({ start_time: "1700000000", limit: "100" });
+  });
+
   it("maps the live 404 run error to NOT_FOUND and does not retry", async () => {
     let calls = 0;
     const client = createOrthogonalClient({
@@ -327,5 +408,53 @@ describe("real Orthogonal wire shapes", () => {
     });
     await expect(client.run({ api: "nope", path: "/x", idempotencyKey: KEY })).rejects.toMatchObject({ code: ErrorCode.NOT_FOUND });
     expect(calls).toBe(1);
+  });
+});
+
+describe("pre-flight required-param validation", () => {
+  // Serves /details with one required body param, and a success envelope for /run.
+  function detailsWithRequiredEmail(onRun?: () => void): typeof fetch {
+    return (async (url: string | URL | Request) => {
+      const u = String(url);
+      if (u.includes("/details")) {
+        return jsonResponse({
+          success: true,
+          api: { slug: "apollo", verified: true },
+          endpoint: {
+            path: "/v1/people/match",
+            method: "POST",
+            price: 0.03,
+            bodyParams: [{ name: "email", type: "string", required: true }],
+          },
+        });
+      }
+      if (u.includes("/run")) onRun?.();
+      return jsonResponse(RUN_BODY);
+    }) as typeof fetch;
+  }
+
+  it("rejects a run with a missing required param BEFORE making the paid call", async () => {
+    let runCalls = 0;
+    const client = createOrthogonalClient({ getApiKey: apiKey, fetchImpl: detailsWithRequiredEmail(() => runCalls++) });
+    await client.getDetails("apollo", "/v1/people/match"); // indexes required: body.email
+    const err = await client.run({ api: "apollo", path: "/v1/people/match", body: {}, idempotencyKey: KEY }).catch((e) => e);
+    expect(isOrthaError(err) && err.code).toBe(ErrorCode.BAD_REQUEST);
+    expect(isOrthaError(err) && err.message).toContain("body.email");
+    expect(isOrthaError(err) && err.maybeBilled).toBe(false);
+    expect(runCalls).toBe(0); // fails free — never spent
+  });
+
+  it("allows the run once the required param is present", async () => {
+    const client = createOrthogonalClient({ getApiKey: apiKey, fetchImpl: detailsWithRequiredEmail() });
+    await client.getDetails("apollo", "/v1/people/match");
+    const r = await client.run({ api: "apollo", path: "/v1/people/match", body: { email: "a@b.com" }, idempotencyKey: KEY });
+    expect(r.success).toBe(true);
+  });
+
+  it("skips validation for an endpoint never inspected via getDetails", async () => {
+    // No /details lookup → no schema → we can't know the requirements, so don't block.
+    const client = createOrthogonalClient({ getApiKey: apiKey, fetchImpl: async () => jsonResponse(RUN_BODY) });
+    const r = await client.run({ api: "uninspected", path: "/x", body: {}, idempotencyKey: KEY });
+    expect(r.success).toBe(true);
   });
 });

@@ -246,6 +246,10 @@ async function* dispatchRun(
   // ── Budget pre-flight ──
   const estimate = await deps.orthogonal.estimateCost([{ api, path, expectedCalls: 1 }]);
   const estCents = estimate.estimatedCents;
+  // A dynamic price means estCents is a FLOOR, not the exact charge. We force an
+  // explicit approval even when the budget check would pass, so a "watch it spend"
+  // user okays a call that may settle higher than the meter shows.
+  const isDynamic = estimate.hasDynamicPricing;
   const decision = await deps.budget.checkEstimate(deps.workspaceId, deps.conversationId, estCents);
 
   if (decision.decision === "denied") {
@@ -257,23 +261,18 @@ async function* dispatchRun(
     return { kind: "cancelled" };
   }
 
-  if (decision.decision === "permission_required") {
-    yield {
-      type: "permission_required",
+  if (decision.decision === "permission_required" || isDynamic) {
+    const gate = {
+      type: "permission_required" as const,
       stepId: stepLabel,
-      kind: "cost",
+      kind: "cost" as const,
       estCents,
       sessionCents: decision.sessionSpentCents,
       capCents: decision.sessionCapCents,
+      ...(isDynamic ? { dynamic: true } : {}),
     };
-    const response = await deps.requestPermission({
-      type: "permission_required",
-      stepId: stepLabel,
-      kind: "cost",
-      estCents,
-      sessionCents: decision.sessionSpentCents,
-      capCents: decision.sessionCapCents,
-    });
+    yield gate;
+    const response = await deps.requestPermission(gate);
 
     switch (response.decision) {
       case "skip":

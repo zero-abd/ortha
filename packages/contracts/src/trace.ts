@@ -50,6 +50,9 @@ export const TraceEventSchema = z.discriminatedUnion("type", [
     // Present for side_effect gates: what the agent wants to do, and to what.
     action: z.string().optional(),
     target: z.string().optional(),
+    // Present (true) on a cost gate forced by dynamic pricing: estCents is a floor,
+    // the actual charge may be higher. The chip renders "~$X+ · price varies".
+    dynamic: z.boolean().optional(),
   }),
   z.object({
     type: z.literal("permission_resolved"),

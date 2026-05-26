@@ -6,12 +6,14 @@ interface Props {
   estCents: number;
   sessionCents: number;
   capCents: number;
+  /** True when the price is dynamic: estCents is a floor, the real charge may be higher. */
+  dynamic?: boolean;
   resolved?: "approved" | "skipped";
   onDecide: (r: PermissionResponse) => void;
 }
 
 /** Inline spend-approval chip (DESIGN.md §4) — non-modal, keeps the flow. */
-export function ApprovalChip({ stepId, estCents, sessionCents, capCents, resolved, onDecide }: Props) {
+export function ApprovalChip({ stepId, estCents, sessionCents, capCents, dynamic, resolved, onDecide }: Props) {
   if (resolved) {
     return (
       <div className="chip chip--resolved">
@@ -22,7 +24,8 @@ export function ApprovalChip({ stepId, estCents, sessionCents, capCents, resolve
   return (
     <div className="chip" role="group" aria-label="Spend approval">
       <div className="chip__head">
-        Next step <span className="chip__cost">~{dollars(estCents)}</span> · session {dollars(sessionCents + estCents)} / {dollars(capCents)} cap
+        Next step <span className="chip__cost">~{dollars(estCents)}{dynamic ? "+" : ""}</span>
+        {dynamic ? <span className="chip__note"> · price varies</span> : null} · session {dollars(sessionCents + estCents)} / {dollars(capCents)} cap
       </div>
       <div className="chip__actions">
         <button className="btn-sm btn-sm--accent" onClick={() => onDecide({ stepId, decision: "approve" })}>

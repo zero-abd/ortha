@@ -197,6 +197,52 @@ describe("runAgentTurn — permission gate", () => {
     expect(types).toContain("tool_result");
   });
 
+  it("forces a cost gate when pricing is dynamic, even though the budget check passes", async () => {
+    // Default budget is well within cap → "ok". The gate must come from the estimate
+    // being a floor (dynamic pricing), so a "watch it spend" user explicitly approves.
+    const orthogonal = makeMockOrthogonalClient({
+      async estimateCost(plan) {
+        const breakdown = plan.map((s) => ({ api: s.api, path: s.path, cents: 3 * s.expectedCalls, dynamic: true }));
+        return {
+          estimatedCents: breakdown.reduce((a, b) => a + b.cents, 0),
+          breakdown,
+          hasUnknownPrices: false,
+          hasDynamicPricing: true,
+        };
+      },
+    });
+    const requestPermission = vi.fn(
+      async (): Promise<PermissionResponse> => ({ stepId: "x", decision: "approve" }),
+    );
+    const llm = makeTurnScriptedLLM([
+      [RUN_CALL, { type: "done", stopReason: "tool_use" }],
+      [{ type: "token", text: "ok" }, { type: "done", stopReason: "end" }],
+    ]);
+
+    const events = await collect(baseDeps({ llm, orthogonal, requestPermission }));
+    expect(requestPermission).toHaveBeenCalledOnce();
+    const gate = events.find((e) => e.type === "permission_required");
+    expect(gate).toMatchObject({ kind: "cost", dynamic: true });
+    // Approval still lets the paid call proceed end-to-end.
+    expect(events.some((e) => e.type === "tool_call_started")).toBe(true);
+    expect(events.some((e) => e.type === "tool_result")).toBe(true);
+  });
+
+  it("does NOT gate a static-priced call that fits the budget", async () => {
+    // Regression guard: the dynamic-pricing gate must not fire on ordinary calls.
+    const requestPermission = vi.fn(
+      async (): Promise<PermissionResponse> => ({ stepId: "x", decision: "approve" }),
+    );
+    const llm = makeTurnScriptedLLM([
+      [RUN_CALL, { type: "done", stopReason: "tool_use" }],
+      [{ type: "token", text: "ok" }, { type: "done", stopReason: "end" }],
+    ]);
+    const events = await collect(baseDeps({ llm, requestPermission }));
+    expect(requestPermission).not.toHaveBeenCalled();
+    expect(events.some((e) => e.type === "permission_required")).toBe(false);
+    expect(events.some((e) => e.type === "tool_result")).toBe(true);
+  });
+
   it("skip feeds a skipped result and never calls the tool", async () => {
     const budget = gatingBudget();
     const runSpy = vi.fn();
