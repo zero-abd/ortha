@@ -12,6 +12,7 @@ import {
   type RunInput,
   type RunResult,
   type SearchInput,
+  type SideEffectClass,
   type ToolApi,
   type ToolDetails,
 } from "@ortha/contracts";
@@ -53,7 +54,11 @@ export function createOrthogonalClient(deps: OrthogonalClientDeps): OrthogonalCl
   // Required-param schema indexed by getDetails, consulted by run() for a free
   // pre-flight check so a missing required param never becomes a wasted paid call.
   const schemaIndex = new Map<string, RequiredParams>();
-  const priceKey = (api: string, path: string): string => `${api} ${path}`;
+  // Keyed by method+path so endpoints that share a path (e.g. GET vs POST /foo) don't
+  // alias each other's price/schema (L7). A method-less key is also written as an
+  // agnostic fallback, so callers that don't know the method (the run path) still resolve.
+  const priceKey = (api: string, path: string, method?: string): string =>
+    method ? `${api} ${method.toUpperCase()} ${path}` : `${api} ${path}`;
 
   // `retries` defaults to the client-wide maxRetries. Paid /run passes 0: the
   // Orthogonal server does NOT honor idempotency-key (verified against the live
@@ -126,7 +131,10 @@ export function createOrthogonalClient(deps: OrthogonalClientDeps): OrthogonalCl
         // Live search results no longer include a price; only index when present.
         if (ep.price === undefined) continue;
         const cents = priceToCents(ep.price);
-        if (cents !== null) priceIndex.set(priceKey(api.slug, ep.path), cents);
+        if (cents !== null) {
+          priceIndex.set(priceKey(api.slug, ep.path, ep.method), cents);
+          priceIndex.set(priceKey(api.slug, ep.path), cents); // agnostic fallback
+        }
       }
     }
   }
@@ -145,18 +153,26 @@ export function createOrthogonalClient(deps: OrthogonalClientDeps): OrthogonalCl
       const parsed = DetailsResponseSchema.parse(await post("/details", { api, path }));
       const ep = parsed.endpoint;
       // Price comes as dollars (e.g. 0.03). Prefer it; fall back to any indexed price.
-      const cents = ep.price !== undefined ? Math.round(ep.price * 100) : priceIndex.get(priceKey(api, path)) ?? 0;
-      // Index it so estimateCost can price this endpoint after a details lookup.
-      if (ep.price !== undefined) priceIndex.set(priceKey(api, path), cents);
+      const cents =
+        ep.price !== undefined
+          ? Math.round(ep.price * 100)
+          : priceIndex.get(priceKey(api, path, ep.method)) ?? priceIndex.get(priceKey(api, path)) ?? 0;
+      // Index under both the method-specific and agnostic keys (L7), so estimateCost
+      // resolves whether or not the caller knows the method.
+      const setBoth = <V>(idx: Map<string, V>, value: V): void => {
+        idx.set(priceKey(api, path, ep.method), value);
+        idx.set(priceKey(api, path), value);
+      };
+      if (ep.price !== undefined) setBoth(priceIndex, cents);
       // Dynamic pricing makes `cents` a floor, not the exact charge. Index it so a later
       // estimateCost (e.g. at run-time) knows to force an explicit spend approval.
       const hasDynamicPricing = ep.hasDynamicPricing === true;
-      dynamicIndex.set(priceKey(api, path), hasDynamicPricing);
+      setBoth(dynamicIndex, hasDynamicPricing);
       const inputSchema = ep.bodyParams?.length || ep.queryParams?.length || ep.pathParams?.length
         ? { query: ep.queryParams ?? [], body: ep.bodyParams ?? [], path: ep.pathParams ?? [] }
         : null;
       // Index the required-param names so run() can pre-flight a paid call for free.
-      schemaIndex.set(priceKey(api, path), {
+      setBoth(schemaIndex, {
         query: requiredParamNames(ep.queryParams),
         body: requiredParamNames(ep.bodyParams),
         path: requiredParamNames(ep.pathParams),
@@ -170,8 +186,8 @@ export function createOrthogonalClient(deps: OrthogonalClientDeps): OrthogonalCl
         priceCents: cents,
         hasDynamicPricing,
         verified: parsed.api?.verified === true,
-        // GET is a read; anything else may mutate — treat as write so the gate is cautious.
-        sideEffect: ep.method.toUpperCase() === "GET" ? "read" : "write",
+        sideEffect: classifySideEffect(ep.method, path, ep.description ?? ""),
+        longRunning: classifyLongRunning(path, ep.description ?? ""),
       };
     },
 
@@ -226,9 +242,11 @@ export function createOrthogonalClient(deps: OrthogonalClientDeps): OrthogonalCl
       let hasUnknownPrices = false;
       let hasDynamicPricing = false;
       const breakdown = plan.map((s) => {
-        const unit = priceIndex.get(priceKey(s.api, s.path));
+        // Prefer the method-specific entry; fall back to the agnostic key (L7).
+        const unit = priceIndex.get(priceKey(s.api, s.path, s.method)) ?? priceIndex.get(priceKey(s.api, s.path));
         if (unit === undefined) hasUnknownPrices = true;
-        const dynamic = dynamicIndex.get(priceKey(s.api, s.path)) ?? false;
+        const dynamic =
+          dynamicIndex.get(priceKey(s.api, s.path, s.method)) ?? dynamicIndex.get(priceKey(s.api, s.path)) ?? false;
         if (dynamic) hasDynamicPricing = true;
         return { api: s.api, path: s.path, cents: (unit ?? 0) * s.expectedCalls, dynamic };
       });
@@ -344,6 +362,34 @@ function missingRequiredParams(schema: RequiredParams | undefined, input: RunInp
     if (stillTemplated && !provided) missing.push(`path.${name}`);
   }
   return missing;
+}
+
+// Verbs that signal a real mutation (write to the outside world). The whole social
+// category is read-only POST, so method alone over-gates; we look at the path/description.
+const MUTATE_HINTS = [
+  "send", "create", "delete", "remove", "update", "modify", "insert",
+  "publish", "submit", "cancel", "upload", "charge", "schedule", "write",
+];
+
+/**
+ * Classify an endpoint's side-effect risk (L5). GET is always a read. Most non-GET
+ * endpoints in the catalog are read-only lookups, so default POST to read and only
+ * flag a genuine mutation when the path or description carries a mutate verb. The
+ * loop gates a "write" behind an explicit confirmation modal.
+ */
+function classifySideEffect(method: string, path: string, description: string): SideEffectClass {
+  if (method.toUpperCase() === "GET") return "read";
+  const haystack = `${path} ${description}`.toLowerCase();
+  return MUTATE_HINTS.some((h) => haystack.includes(h)) ? "write" : "read";
+}
+
+// Signals of a submit→poll / long-running job that can't finish in the 30s fetch window.
+const LONG_OP_HINTS = ["crawl", "research", "async", "long-running", "long running", "submit and poll", "batch job", "/jobs"];
+
+/** Detect a long-running endpoint that must not be auto-run (L4). Heuristic on path + description. */
+function classifyLongRunning(path: string, description: string): boolean {
+  const haystack = `${path} ${description}`.toLowerCase();
+  return LONG_OP_HINTS.some((h) => haystack.includes(h));
 }
 
 function priceToCents(price: string): Cents | null {

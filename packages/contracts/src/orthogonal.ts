@@ -124,12 +124,20 @@ export interface ToolDetails {
   readonly hasDynamicPricing: boolean;
   readonly verified: boolean;
   readonly sideEffect: SideEffectClass;
+  /**
+   * True for submit→poll / long-running endpoints (crawls, deep research). These can't
+   * complete inside the 30s buffered-fetch window on Workers, so the agent must NOT
+   * auto-run them — a paid long-op would abort at the timeout yet may still be charged.
+   */
+  readonly longRunning: boolean;
 }
 
 export interface CostPlanStep {
   readonly api: string;
   readonly path: string;
   readonly expectedCalls: number;
+  /** Optional HTTP method, to disambiguate endpoints that share a path when pricing. */
+  readonly method?: string;
 }
 
 export interface CostEstimate {

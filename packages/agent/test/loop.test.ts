@@ -275,6 +275,91 @@ describe("runAgentTurn — permission gate", () => {
     expect(events.at(-1)).toEqual({ type: "done", stopReason: "end" });
   });
 
+  it("escalates a write endpoint to the side_effect confirmation gate", async () => {
+    // getDetails reports a write; the loop must gate the subsequent run behind the modal.
+    const orthogonal = makeMockOrthogonalClient({
+      async getDetails(api, path) {
+        return {
+          api,
+          path,
+          method: "POST",
+          inputSchema: null,
+          outputSchema: null,
+          priceCents: 3,
+          hasDynamicPricing: false,
+          verified: true,
+          sideEffect: "write",
+        };
+      },
+    });
+    const requestPermission = vi.fn(
+      async (): Promise<PermissionResponse> => ({ stepId: "x", decision: "approve" }),
+    );
+    const llm = makeTurnScriptedLLM([
+      [{ type: "tool_call_request", id: "d1", name: "get_tool_details", args: { api: "apollo", path: "/v1/people/match" } }, { type: "done", stopReason: "tool_use" }],
+      [RUN_CALL, { type: "done", stopReason: "tool_use" }],
+      [{ type: "token", text: "done" }, { type: "done", stopReason: "end" }],
+    ]);
+
+    const events = await collect(baseDeps({ llm, orthogonal, requestPermission }));
+    const gate = events.find((e) => e.type === "permission_required");
+    expect(gate).toMatchObject({ kind: "side_effect" });
+    expect((gate as { action?: string }).action).toContain("apollo");
+    expect(requestPermission).toHaveBeenCalledOnce();
+    // Confirmed → the call proceeds to a result.
+    expect(events.some((e) => e.type === "tool_result")).toBe(true);
+  });
+
+  it("does NOT gate a read endpoint that fits the budget", async () => {
+    // Default mock getDetails reports a read; no side_effect modal, no cost chip.
+    const requestPermission = vi.fn(
+      async (): Promise<PermissionResponse> => ({ stepId: "x", decision: "approve" }),
+    );
+    const llm = makeTurnScriptedLLM([
+      [{ type: "tool_call_request", id: "d1", name: "get_tool_details", args: { api: "apollo", path: "/v1/people/match" } }, { type: "done", stopReason: "tool_use" }],
+      [RUN_CALL, { type: "done", stopReason: "tool_use" }],
+      [{ type: "token", text: "done" }, { type: "done", stopReason: "end" }],
+    ]);
+    const events = await collect(baseDeps({ llm, requestPermission }));
+    expect(events.some((e) => e.type === "permission_required")).toBe(false);
+    expect(requestPermission).not.toHaveBeenCalled();
+    expect(events.some((e) => e.type === "tool_result")).toBe(true);
+  });
+
+  it("refuses to auto-run a long-running endpoint — no paid call", async () => {
+    const runSpy = vi.fn();
+    const orthogonal = makeMockOrthogonalClient({
+      async getDetails(api, path) {
+        return {
+          api,
+          path,
+          method: "POST",
+          inputSchema: null,
+          outputSchema: null,
+          priceCents: 10,
+          hasDynamicPricing: false,
+          verified: true,
+          sideEffect: "read",
+          longRunning: true,
+        };
+      },
+      async run(input) {
+        runSpy();
+        return { success: true, priceCents: 10, data: {}, requestId: "r" as never, _i: input } as never;
+      },
+    });
+    const llm = makeTurnScriptedLLM([
+      [{ type: "tool_call_request", id: "d1", name: "get_tool_details", args: { api: "crawler", path: "/crawl" } }, { type: "done", stopReason: "tool_use" }],
+      [{ type: "tool_call_request", id: "r1", name: "run_tool", args: { api: "crawler", path: "/crawl", body: { url: "https://x.com" } } }, { type: "done", stopReason: "tool_use" }],
+      [{ type: "token", text: "I'll use a synchronous tool instead." }, { type: "done", stopReason: "end" }],
+    ]);
+    const events = await collect(baseDeps({ llm, orthogonal }));
+    expect(runSpy).not.toHaveBeenCalled(); // never made the paid long-op call
+    expect(events.some((e) => e.type === "tool_call_started")).toBe(false);
+    expect(events.some((e) => e.type === "permission_required")).toBe(false);
+    expect(events.at(-1)).toEqual({ type: "done", stopReason: "end" });
+  });
+
   it("denied emits a BUDGET_EXCEEDED error and stops", async () => {
     const budget: BudgetPolicy = {
       ...makeMockBudgetPolicy(),

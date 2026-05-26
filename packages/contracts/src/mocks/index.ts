@@ -66,6 +66,7 @@ export function makeMockOrthogonalClient(
         hasDynamicPricing: false,
         verified: true,
         sideEffect: "read",
+        longRunning: false,
       };
     },
     async run(input: RunInput): Promise<RunResult> {

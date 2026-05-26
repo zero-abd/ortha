@@ -39,6 +39,33 @@ describe("search + estimateCost", () => {
     expect(est.hasDynamicPricing).toBe(false); // static price until a /details says otherwise
   });
 
+  it("keys prices by method so two methods on one path don't collide (L7)", async () => {
+    const dualMethod = {
+      success: true,
+      results: [
+        {
+          name: "Dual",
+          slug: "dual",
+          endpoints: [
+            { id: "g", path: "/foo", method: "GET", description: "read", price: "0.01" },
+            { id: "p", path: "/foo", method: "POST", description: "write", price: "0.05" },
+          ],
+        },
+      ],
+      count: 1,
+      apisCount: 1,
+    };
+    const client = createOrthogonalClient({ getApiKey: apiKey, fetchImpl: async () => jsonResponse(dualMethod) });
+    await client.search({ prompt: "dual" });
+    const get = await client.estimateCost([{ api: "dual", path: "/foo", method: "GET", expectedCalls: 1 }]);
+    const post = await client.estimateCost([{ api: "dual", path: "/foo", method: "POST", expectedCalls: 1 }]);
+    expect(get.estimatedCents).toBe(1); // GET price, not aliased by POST
+    expect(post.estimatedCents).toBe(5); // POST price, not aliased by GET
+    // A method-less estimate still resolves via the agnostic fallback (no regression).
+    const agnostic = await client.estimateCost([{ api: "dual", path: "/foo", expectedCalls: 1 }]);
+    expect(agnostic.estimatedCents).toBeGreaterThan(0);
+  });
+
   it("flags unknown prices for un-indexed endpoints", async () => {
     const client = createOrthogonalClient({ getApiKey: apiKey, fetchImpl: async () => jsonResponse(SEARCH_BODY) });
     const est = await client.estimateCost([{ api: "mystery", path: "/x", expectedCalls: 1 }]);
@@ -318,15 +345,17 @@ describe("real Orthogonal wire shapes", () => {
     expect(est.hasUnknownPrices).toBe(false);
   });
 
-  it("getDetails marks a non-GET endpoint as write so the permission gate is cautious", async () => {
+  it("classifies a read-only POST (no mutate verb) as read, not write (L5 fix)", async () => {
+    // serper-scrape POST is a read-only lookup. The old method-only heuristic wrongly
+    // flagged every non-GET as a write; verb-based classification keeps it a read.
     const postDetails = {
       success: true,
       api: { slug: "serper-scrape", verified: true },
-      endpoint: { path: "/", method: "POST", price: 0.02, bodyParams: [{ name: "url", type: "string", required: true }] },
+      endpoint: { path: "/", method: "POST", price: 0.02, description: "Scrape a page to markdown", bodyParams: [{ name: "url", type: "string", required: true }] },
     };
     const client = createOrthogonalClient({ getApiKey: apiKey, fetchImpl: async () => jsonResponse(postDetails) });
     const d = await client.getDetails("serper-scrape", "/");
-    expect(d.sideEffect).toBe("write");
+    expect(d.sideEffect).toBe("read");
     expect(d.priceCents).toBe(2);
   });
 
@@ -350,6 +379,42 @@ describe("real Orthogonal wire shapes", () => {
     const est = await client.estimateCost([{ api: "tavily", path: "/search", expectedCalls: 1 }]);
     expect(est.hasDynamicPricing).toBe(true);
     expect(est.breakdown[0]?.dynamic).toBe(true);
+  });
+
+  it("classifies side-effect by verb, not method alone (L5): read-only POST stays read", async () => {
+    const lookupPost = {
+      success: true,
+      api: { slug: "apollo", verified: true },
+      endpoint: { path: "/people/match", method: "POST", price: 0.03, description: "Look up a person by email or domain" },
+    };
+    const c1 = createOrthogonalClient({ getApiKey: apiKey, fetchImpl: async () => jsonResponse(lookupPost) });
+    expect((await c1.getDetails("apollo", "/people/match")).sideEffect).toBe("read");
+
+    const sendPost = {
+      success: true,
+      api: { slug: "mailer", verified: true },
+      endpoint: { path: "/messages/send", method: "POST", price: 0.01, description: "Send an email to a contact" },
+    };
+    const c2 = createOrthogonalClient({ getApiKey: apiKey, fetchImpl: async () => jsonResponse(sendPost) });
+    expect((await c2.getDetails("mailer", "/messages/send")).sideEffect).toBe("write");
+  });
+
+  it("flags long-running submit->poll endpoints, leaves synchronous ones alone (L4)", async () => {
+    const crawl = {
+      success: true,
+      api: { slug: "crawler", verified: true },
+      endpoint: { path: "/crawl", method: "POST", price: 0.1, description: "Crawl an entire site (1-10 min)" },
+    };
+    const c1 = createOrthogonalClient({ getApiKey: apiKey, fetchImpl: async () => jsonResponse(crawl) });
+    expect((await c1.getDetails("crawler", "/crawl")).longRunning).toBe(true);
+
+    const scrape = {
+      success: true,
+      api: { slug: "ctx", verified: true },
+      endpoint: { path: "/web/scrape/markdown", method: "GET", price: 0.03, description: "Scrape one URL to markdown" },
+    };
+    const c2 = createOrthogonalClient({ getApiKey: apiKey, fetchImpl: async () => jsonResponse(scrape) });
+    expect((await c2.getDetails("ctx", "/web/scrape/markdown")).longRunning).toBe(false);
   });
 
   it("run validates the live success envelope", async () => {

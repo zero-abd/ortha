@@ -49,6 +49,10 @@ export const META_TOOLS: readonly ToolSpec[] = [
       properties: {
         api: { type: "string", description: "The API slug." },
         path: { type: "string", description: "The endpoint path." },
+        method: {
+          type: "string",
+          description: "HTTP method from get_tool_details (e.g. \"GET\"/\"POST\"). Disambiguates endpoints sharing a path for accurate pricing.",
+        },
         body: { type: "object", description: "Request body, per the endpoint's input schema." },
         query: {
           type: "object",
