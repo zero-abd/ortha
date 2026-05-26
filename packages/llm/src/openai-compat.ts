@@ -201,7 +201,25 @@ function toOpenAIMessages(system: string, messages: readonly LLMMessage[]): unkn
     if (m.role === "system") {
       out.push({ role: "system", content: m.content });
     } else if (m.role === "tool") {
-      out.push({ role: "tool", tool_call_id: m.toolCallId ?? "", content: m.content });
+      // `name` is required by Gemini's compat layer (function_response.name) and
+      // ignored by OpenAI/OpenRouter, so always include it when known.
+      out.push({
+        role: "tool",
+        tool_call_id: m.toolCallId ?? "",
+        ...(m.toolName ? { name: m.toolName } : {}),
+        content: m.content,
+      });
+    } else if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
+      // Re-emit the assistant's tool_calls so the following tool result has a parent.
+      out.push({
+        role: "assistant",
+        content: m.content === "" ? null : m.content,
+        tool_calls: m.toolCalls.map((tc) => ({
+          id: tc.id,
+          type: "function",
+          function: { name: tc.name, arguments: JSON.stringify(tc.args) },
+        })),
+      });
     } else {
       out.push({ role: m.role, content: m.content });
     }

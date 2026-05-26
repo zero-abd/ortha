@@ -111,13 +111,15 @@ export async function* runAgentTurn(deps: AgentDeps, input: AgentInput): AsyncIt
         }
       }
 
-      // Record the assistant turn (text + any tool-call ids) into the transcript.
+      // Record the assistant turn into the transcript. Carry the FULL tool calls
+      // (id + name + args), not just ids: replaying an assistant turn without its
+      // tool_calls orphans the following tool result and every provider rejects it.
       if (assistantText.length > 0 || pending.length > 0) {
-        const toolCallIds = pending.map((p) => p.id);
+        const toolCalls = pending.map((p) => ({ id: p.id, name: p.name, args: p.args }));
         messages.push({
           role: "assistant",
           content: assistantText,
-          ...(toolCallIds.length > 0 ? { toolCallIds } : {}),
+          ...(toolCalls.length > 0 ? { toolCalls } : {}),
         });
       }
 
@@ -137,7 +139,7 @@ export async function* runAgentTurn(deps: AgentDeps, input: AgentInput): AsyncIt
           return;
         }
         sessionCents = result.sessionCents;
-        messages.push(toolMessage(call.id, result.toolContent));
+        messages.push(toolMessage(call.id, call.name, result.toolContent));
       }
 
       await checkpoint(deps, messages, stepCounter, sessionCents);
@@ -356,8 +358,8 @@ async function* emitError(err: unknown): AsyncGenerator<TraceEvent, void> {
   };
 }
 
-function toolMessage(toolCallId: string, content: string): LLMMessage {
-  return { role: "tool", content, toolCallId };
+function toolMessage(toolCallId: string, toolName: string, content: string): LLMMessage {
+  return { role: "tool", content, toolCallId, toolName };
 }
 
 async function checkpoint(

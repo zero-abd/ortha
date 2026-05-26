@@ -1,0 +1,47 @@
+import { type LLMEvent, type LLMMessage } from "@ortha/contracts";
+import { describe, expect, it } from "vitest";
+import { createOpenAICompatProvider } from "../src/openai-compat.js";
+import type { Transport, TransportRequest } from "../src/transport.js";
+
+function cannedTransport(chunks: readonly unknown[], onReq?: (r: TransportRequest) => void): Transport {
+  return async function* (req: TransportRequest) {
+    onReq?.(req);
+    for (const c of chunks) yield typeof c === "string" ? c : JSON.stringify(c);
+  };
+}
+async function drain(it: AsyncIterable<LLMEvent>): Promise<void> {
+  for await (const _ of it) void _;
+}
+const DONE = [{ choices: [{ delta: {}, finish_reason: "stop" }] }];
+
+// Regression for the live-mode blocker: an assistant turn that requested tools must
+// be replayed WITH its tool_calls, and the tool result must carry the function name,
+// or providers (Gemini's compat layer especially) reject the orphaned function_response.
+describe("openai-compat — tool round-trip serialization", () => {
+  it("re-emits assistant tool_calls and the tool result name", async () => {
+    let body: { messages: Array<Record<string, unknown>> } | undefined;
+    const messages: LLMMessage[] = [
+      { role: "user", content: "scrape example.com" },
+      { role: "assistant", content: "", toolCalls: [{ id: "call_1", name: "run_tool", args: { api: "ctx", path: "/x" } }] },
+      { role: "tool", toolCallId: "call_1", toolName: "run_tool", content: "the result" },
+    ];
+    const provider = createOpenAICompatProvider({
+      providerId: "gemini",
+      apiKey: "k",
+      transport: cannedTransport(DONE, (r) => { body = JSON.parse(r.body) as typeof body; }),
+    });
+    await drain(provider.streamCompletion({ model: "gemini-2.5-flash", system: "sys", messages, tools: [], maxTokens: 256 }));
+
+    const msgs = body!.messages;
+    const asst = msgs.find((m) => m.role === "assistant") as { tool_calls: Array<{ id: string; type: string; function: { name: string; arguments: string } }> };
+    expect(asst.tool_calls).toHaveLength(1);
+    expect(asst.tool_calls[0]!.id).toBe("call_1");
+    expect(asst.tool_calls[0]!.type).toBe("function");
+    expect(asst.tool_calls[0]!.function.name).toBe("run_tool");
+    expect(JSON.parse(asst.tool_calls[0]!.function.arguments)).toEqual({ api: "ctx", path: "/x" });
+
+    const tool = msgs.find((m) => m.role === "tool") as { name: string; tool_call_id: string };
+    expect(tool.name).toBe("run_tool");
+    expect(tool.tool_call_id).toBe("call_1");
+  });
+});
