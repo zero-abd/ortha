@@ -199,10 +199,12 @@ export class ConversationDO implements DurableObject {
       model: ports.model,
       workspaceId: this.workspaceId,
       conversationId: this.conversationId,
-      requestPermission: (event) =>
+      // The gate event is already streamed to the client by the loop's `yield`
+      // (relayed in the for-await below); here we only register the resolver and
+      // await the client's reply. Re-sending it would double-render the chip.
+      requestPermission: () =>
         new Promise<PermissionResponse>((resolve) => {
           this.pendingPermission = resolve;
-          ws.send(JSON.stringify(event));
         }),
       checkpoint: async (state) => {
         await this.ctx.storage.put("step", state.step);
