@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import type { PermissionResponse, TraceEvent } from "@ortha/contracts";
 import { ApprovalChip } from "./components/ApprovalChip.tsx";
-import { Brand } from "./components/Logo.tsx";
+import { Brand, Spinner } from "./components/Logo.tsx";
 import { CostMeter } from "./components/CostMeter.tsx";
 import { RightPanel } from "./components/RightPanel.tsx";
 import { SettingsModal } from "./components/SettingsModal.tsx";
@@ -258,9 +258,10 @@ function Message({ m, onOpenRaw, pending, resolvedPerms, onDecide, cap, session 
           <ApprovalChip stepId={pending.event.stepId} estCents={pending.event.estCents} sessionCents={pending.event.sessionCents} capCents={pending.event.capCents} onDecide={onDecide} />
         )}
         {m.content && <div className="md">{m.content}</div>}
-        {m.streaming && !m.content && (
+        {m.streaming && !m.content && m.steps.length === 0 && (
           <div className="thinking">
-            <span className="skeleton__line skeleton" />
+            <Spinner size={16} />
+            <span className="muted">Thinking…</span>
           </div>
         )}
         {m.error && (

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { dollars, ms } from "../lib/format.ts";
 import type { TraceStep } from "../types.ts";
+import { Spinner } from "./Logo.tsx";
 
 const ICON: Record<TraceStep["status"], string> = {
   searching: "⊚", // ⊚
@@ -25,9 +26,13 @@ export function TraceBlock({ step, onOpenRaw }: Props) {
     <div className="trace">
       <button className="trace__line mono" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
         <span className="caret trace__chev">{open ? "▾" : "▸"}</span>
-        <span className={`trace__icon--${step.status} ${running ? "spin" : ""}`} aria-hidden>
-          {ICON[step.status]}
-        </span>
+        {running ? (
+          <Spinner size={14} />
+        ) : (
+          <span className={`trace__icon--${step.status}`} aria-hidden>
+            {ICON[step.status]}
+          </span>
+        )}
         <span>{label}</span>
         {step.priceCents !== undefined && <span className="trace__sep">· {dollars(step.priceCents)}</span>}
         {step.latencyMs !== undefined && <span className="trace__sep">· {ms(step.latencyMs)}</span>}

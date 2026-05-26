@@ -194,6 +194,8 @@ select.select:focus, .composer__input:focus, input:focus, textarea:focus { outli
 .trace__heal { padding: 0 12px 10px 36px; font-family: var(--font-mono); font-size: 12px; color: var(--warn); }
 .spin { animation: spin 0.9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+.ortha-spin { display: inline-block; vertical-align: -2px; transform-origin: 50% 50%; animation: spin 0.85s cubic-bezier(0.6, 0.1, 0.4, 0.9) infinite; }
+@media (prefers-reduced-motion: reduce) { .ortha-spin { animation: none; } }
 
 /* ── Spend approval chip ───────────────────────────────────────────────── */
 .chip { border: 1px solid var(--hairline-strong); border-radius: var(--radius); background: var(--surface); padding: 12px 14px; margin: 8px 0; display: flex; flex-direction: column; gap: 10px; box-shadow: var(--shadow); }
@@ -243,7 +245,7 @@ select.select:focus, .composer__input:focus, input:focus, textarea:focus { outli
 .errbubble { display: flex; align-items: center; gap: 10px; padding: 11px 14px; border-radius: var(--radius); background: rgba(251, 113, 133, 0.1); border: 1px solid rgba(251, 113, 133, 0.4); color: var(--ink); font-size: 14px; }
 .errbubble__icon { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: var(--danger); color: #fff; font-weight: 700; font-size: 12px; flex: none; }
 .errbubble__text { flex: 1; }
-.thinking { display: flex; gap: 6px; padding: 4px 0; }
+.thinking { display: flex; align-items: center; gap: 9px; padding: 4px 0; font-size: 14px; }
 .skeleton { position: relative; overflow: hidden; background: var(--surface-2); border-radius: var(--radius-sm); }
 .skeleton::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.08), transparent); animation: shimmer 1.3s infinite; }
 .skeleton__line { display: block; height: 14px; width: 200px; }
