@@ -6,7 +6,7 @@ import { RightPanel } from "./components/RightPanel.tsx";
 import { SideEffectModal } from "./components/SideEffectModal.tsx";
 import { TraceBlock } from "./components/TraceBlock.tsx";
 import { useTheme } from "./lib/useTheme.ts";
-import { runMockTurn } from "./mock/transport.ts";
+import { runTurn } from "./transport.ts";
 import type { ChatMessage, CostState, RawArtifact, TraceStep } from "./types.ts";
 
 const CAP_CENTS = 40;
@@ -35,6 +35,7 @@ export function App() {
   const [running, setRunning] = useState(false);
   const [draft, setDraft] = useState("");
   const rawStore = useRef(new Map<string, unknown>());
+  const conversationId = useRef(crypto.randomUUID());
 
   const patchActive = useCallback((fn: (m: ChatMessage) => ChatMessage) => {
     setMessages((prev) => {
@@ -137,7 +138,7 @@ export function App() {
       ]);
       setRunning(true);
       try {
-        await runMockTurn(text, {
+        await runTurn(text, {
           onEvent: (e) => {
             if (e.type === "tool_call_started") stepApi.current[e.stepId] = e.api;
             onEvent(e);
@@ -146,6 +147,7 @@ export function App() {
           rawStore: rawStore.current,
           startCents: cost.sessionCents,
           capCents: cost.capCents,
+          conversationId: conversationId.current,
         });
       } finally {
         setRunning(false);
