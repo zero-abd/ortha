@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import type { PermissionResponse, TraceEvent } from "@ortha/contracts";
 import { ApprovalChip } from "./components/ApprovalChip.tsx";
+import { Brand } from "./components/Logo.tsx";
 import { CostMeter } from "./components/CostMeter.tsx";
 import { RightPanel } from "./components/RightPanel.tsx";
 import { SettingsModal } from "./components/SettingsModal.tsx";
@@ -167,7 +168,7 @@ export function App() {
   return (
     <div className="app">
       <header className="topbar">
-        <span className="topbar__brand">Ortha</span>
+        <Brand />
         <Select value="Personal" options={["Personal", "Acme Inc"]} onChange={() => {}} ariaLabel="Workspace" />
         <span className="topbar__spacer" />
         <CostMeter sessionCents={cost.sessionCents} capCents={cost.capCents} breakdown={breakdown} />

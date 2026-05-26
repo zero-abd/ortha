@@ -12,7 +12,7 @@ const PROVIDERS = [
 const MODELS = [
   { id: "gemini-2.0-flash", label: "Gemini 2.0 Flash (free)" },
   { id: "gemini-1.5-flash", label: "Gemini 1.5 Flash (free)" },
-  { id: "meta-llama/llama-3.3-70b-instruct:free", label: "Llama 3.3 70B via OpenRouter (free)" },
+  { id: "meta-llama/llama-3.3-70b-instruct:free", label: "Llama 3.3 70B · OpenRouter (free)" },
   { id: "gpt-4o-mini", label: "GPT-4o mini" },
   { id: "gpt-4o", label: "GPT-4o" },
   { id: "claude-3-5-haiku-latest", label: "Claude 3.5 Haiku" },
@@ -33,6 +33,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   const [settings, setSettings] = useState<ApiSettings>(DEFAULTS);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -40,7 +41,10 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
       setKeys(await listKeys());
       setSettings((await getSettings()) ?? DEFAULTS);
     })();
-  }, [open]);
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
 
   if (!open) return null;
 
@@ -65,54 +69,62 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
     setBusy(true);
     await putSettings(settings);
     setBusy(false);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1600);
   };
 
   return (
-    <div className="modal-scrim" onClick={onClose}>
-      <div className="modal" role="dialog" aria-modal="true" aria-label="Settings" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520, width: "92%" }}>
-        <div className="panel__head">
-          <span className="panel__title">Settings · BYOK</span>
-          <button className="iconbtn" onClick={onClose} aria-label="Close">✕</button>
+    <div className="settings-scrim" onClick={onClose}>
+      <div className="settings" role="dialog" aria-modal="true" aria-label="Settings" onClick={(e) => e.stopPropagation()}>
+        <div className="settings__head">
+          <span className="settings__title">Settings · BYOK</span>
+          <button className="iconbtn" onClick={onClose} aria-label="Close settings">✕</button>
         </div>
 
-        <div className="modal__detail" style={{ display: "grid", gap: "var(--s-4)" }}>
-          <div>
-            <label className="msg__role">Model</label>
-            <select className="select" value={settings.model} onChange={(e) => setSettings((s) => ({ ...s, model: e.target.value }))} style={{ width: "100%" }}>
+        <div className="settings__body">
+          <div className="settings__section">
+            <span className="settings__label">Model</span>
+            <select className="select input" value={settings.model} onChange={(e) => setSettings((s) => ({ ...s, model: e.target.value }))}>
               {MODELS.map((m) => (
                 <option key={m.id} value={m.id}>{m.label}</option>
               ))}
             </select>
-          </div>
-
-          <div style={{ display: "flex", gap: "var(--s-3)" }}>
-            <div style={{ flex: 1 }}>
-              <label className="msg__role">Session cap ($)</label>
-              <input className="composer__input" type="number" min={0} step="0.25" value={(settings.sessionCapCents / 100).toString()} onChange={(e) => setSettings((s) => ({ ...s, sessionCapCents: Math.round(Number(e.target.value) * 100) }))} />
-            </div>
-            <div style={{ flex: 1 }}>
-              <label className="msg__role">Monthly cap ($)</label>
-              <input className="composer__input" type="number" min={0} step="1" value={(settings.monthlyCapCents / 100).toString()} onChange={(e) => setSettings((s) => ({ ...s, monthlyCapCents: Math.round(Number(e.target.value) * 100) }))} />
-            </div>
-          </div>
-          <button className="btn-sm btn-sm--accent" disabled={busy} onClick={saveSettings}>Save model + caps</button>
-
-          <div className="trace__sep" />
-          <div className="muted">Bring your own keys — encrypted at rest, never shown again. Live mode needs an Orthogonal key + a key for your selected model's provider. No keys = safe demo mode.</div>
-
-          {PROVIDERS.map((p) => {
-            const set = active(p.id);
-            return (
-              <div key={p.id} style={{ display: "grid", gap: "var(--s-1)" }}>
-                <label className="msg__role">{p.label} {set && <span className="muted">· set ••••{set.hint}</span>}</label>
-                <div style={{ display: "flex", gap: "var(--s-2)" }}>
-                  <input className="composer__input" type="password" placeholder={p.placeholder} value={drafts[p.id] ?? ""} onChange={(e) => setDrafts((d) => ({ ...d, [p.id]: e.target.value }))} style={{ flex: 1 }} />
-                  <button className="btn-sm" disabled={busy} onClick={() => saveKey(p.id)}>Save</button>
-                  {set && <button className="btn-sm" disabled={busy} onClick={() => removeKey(p.id)}>Remove</button>}
-                </div>
+            <div className="settings__row">
+              <div className="field">
+                <span className="settings__label">Session cap ($)</span>
+                <input className="input" type="number" min={0} step="0.25" value={(settings.sessionCapCents / 100).toString()} onChange={(e) => setSettings((s) => ({ ...s, sessionCapCents: Math.round(Number(e.target.value) * 100) }))} />
               </div>
-            );
-          })}
+              <div className="field">
+                <span className="settings__label">Monthly cap ($)</span>
+                <input className="input" type="number" min={0} step="1" value={(settings.monthlyCapCents / 100).toString()} onChange={(e) => setSettings((s) => ({ ...s, monthlyCapCents: Math.round(Number(e.target.value) * 100) }))} />
+              </div>
+            </div>
+            <button className="btn-sm btn-sm--accent" disabled={busy} onClick={saveSettings}>{saved ? "Saved ✓" : "Save model + caps"}</button>
+          </div>
+
+          <div className="settings__divider" />
+
+          <div className="settings__section">
+            <span className="settings__label">Provider keys</span>
+            <span className="muted" style={{ fontSize: 12.5 }}>
+              Bring your own keys — encrypted at rest, never shown again. Live mode needs an Orthogonal key + a key for your selected model's provider. No keys = safe demo mode.
+            </span>
+            {PROVIDERS.map((p) => {
+              const set = active(p.id);
+              return (
+                <div className="field" key={p.id}>
+                  <span className="settings__label" style={{ textTransform: "none", letterSpacing: 0, color: "var(--muted)" }}>
+                    {p.label} {set && <span className="tag-ok">· set ••••{set.hint}</span>}
+                  </span>
+                  <div className="field__row">
+                    <input className="input" type="password" placeholder={p.placeholder} value={drafts[p.id] ?? ""} onChange={(e) => setDrafts((d) => ({ ...d, [p.id]: e.target.value }))} />
+                    <button className="btn-sm" disabled={busy} onClick={() => saveKey(p.id)}>Save</button>
+                    {set && <button className="btn-sm" disabled={busy} onClick={() => removeKey(p.id)}>Remove</button>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       </div>
     </div>

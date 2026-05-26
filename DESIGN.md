@@ -3,38 +3,51 @@
 Source of truth for Ortha's UI. Every frontend agent builds to this. Locked via
 `/plan-design-review` (3/10 → 8/10). If you need to deviate, change THIS file first.
 
-Ortha is an **app console**, not a marketing page. Think Linear / Raycast / Claude
-Desktop craft: calm, dense-but-readable, minimal chrome. The product's wow is
+Ortha is an **app console**, not a marketing page. The product's wow is
 *transparency* — the user watches a real agent discover and call real tools — so the
-UI's job is to make that legible without burying the answer.
+UI's job is to make that legible without burying the answer. The look is
+**gradient-forward and modern** (Codex-energy): glassy surfaces over a deep canvas with
+a vibrant accent gradient used purposefully on the brand, primary actions, active
+states, and focus.
 
 ---
 
 ## 1. Aesthetic
 
-Calm warm-neutral, Claude-adjacent. **Light and dark are both first-class** — design,
-build, and test both. Theme follows system by default with a manual toggle, persisted
-per user.
+Gradient-forward, **dark-first** (the hero) with a fully-supported light theme. Glassy
+translucent surfaces (`backdrop-filter` blur) over a deep canvas with a soft aurora
+glow. Theme follows system by default with a manual toggle, persisted per user.
+
+The accent is a **gradient**, not a flat color — `--grad: linear-gradient(135deg,
+#22D3EE, #6366F1, #D946EF)` (cyan → indigo → fuchsia). Use it on: the logo tile, the
+gradient wordmark, primary/`--accent` buttons, the composer send button, the cost-meter
+fill, the active trace-step icon, focus rings, and the empty-state hero text. Keep
+surfaces calm so the gradient pops; never wash whole panels in it.
 
 ### Color tokens
 
-Define as CSS variables. Never hardcode hex in components.
+CSS variables; never hardcode hex in components. `:root` holds the dark (default) set;
+`:root[data-theme="light"]` overrides.
 
-| Token | Light | Dark |
+| Token | Dark (default) | Light |
 |---|---|---|
-| `--canvas` | `#FAF9F7` | `#1A1A19` |
-| `--surface` | `#FFFFFF` | `#232321` |
-| `--surface-raised` (modal/panel) | `#FFFFFF` | `#2B2B28` |
-| `--ink` (primary text) | `#1A1A19` | `#F2F1EE` |
-| `--muted` (secondary text) | `#6B6B66` | `#9A9A93` |
-| `--hairline` (borders) | `#E7E5E1` | `#34332F` |
-| `--accent` (actions, active step) | `#C8643C` | `#E07A4F` |
-| `--accent-ink` (text on accent) | `#FFFFFF` | `#1A1A19` |
-| `--ok` (tool success) | `#3D8C5A` | `#5FB37C` |
-| `--warn` (cost 80%+) | `#B7791F` | `#E0A33C` |
-| `--danger` (failure, cost 100%) | `#C2453C` | `#E0655B` |
+| `--bg` (canvas) | `#07070C` | `#F5F6FB` |
+| `--surface` (glass) | `rgba(20,20,30,.72)` | `rgba(255,255,255,.74)` |
+| `--elevated` (modal/panel) | `rgba(24,24,36,.94)` | `rgba(255,255,255,.96)` |
+| `--ink` | `#ECEDF5` | `#14141D` |
+| `--muted` | `#9A9AAC` | `#5B5B6B` |
+| `--hairline` | `rgba(255,255,255,.09)` | `rgba(20,20,45,.09)` |
+| `--accent` (solid fallback) | `#8B5CF6` | `#8B5CF6` |
+| `--grad` | cyan→indigo→fuchsia (above) | same |
+| `--ok` / `--warn` / `--danger` | `#34D399` / `#FBBF24` / `#FB7185` | same |
 
-Contrast: all body text ≥ 4.5:1 against its background in **both** themes.
+Plus a soft aurora background (`body::before`) from indigo/fuchsia/cyan radial glows.
+Contrast: all body text ≥ 4.5:1 in **both** themes.
+
+### Logo
+Code-only inline SVG (`components/Logo.tsx`): a gradient rounded-square tile with a
+white ring crossed by **orthogonal axes** (the "Orthogonal" concept) + a gradient
+wordmark. No image assets.
 
 ### Typography
 
