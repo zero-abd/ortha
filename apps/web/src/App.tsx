@@ -415,7 +415,7 @@ function Message({ m, onOpenRaw, pending, resolvedPerms, onDecide, cap, session 
           <ApprovalChip key={`r_${stepId}`} stepId={stepId} estCents={0} sessionCents={session} capCents={cap} resolved={outcome} onDecide={onDecide} />
         ))}
         {showCostChip && pending && (
-          <ApprovalChip stepId={pending.event.stepId} estCents={pending.event.estCents} sessionCents={pending.event.sessionCents} capCents={pending.event.capCents} onDecide={onDecide} />
+          <ApprovalChip stepId={pending.event.stepId} estCents={pending.event.estCents} sessionCents={pending.event.sessionCents} capCents={pending.event.capCents} dynamic={pending.event.dynamic} onDecide={onDecide} />
         )}
         {m.content && <div className="md">{m.content}</div>}
         {m.streaming && !m.content && m.steps.length === 0 && (

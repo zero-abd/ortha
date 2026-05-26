@@ -120,21 +120,36 @@ export interface ToolDetails {
   readonly inputSchema: unknown | null;
   readonly outputSchema: unknown | null;
   readonly priceCents: Cents;
+  /** True when the provider prices dynamically — `priceCents` is a floor, not the exact charge. */
+  readonly hasDynamicPricing: boolean;
   readonly verified: boolean;
   readonly sideEffect: SideEffectClass;
+  /**
+   * True for submit→poll / long-running endpoints (crawls, deep research). These can't
+   * complete inside the 30s buffered-fetch window on Workers, so the agent must NOT
+   * auto-run them — a paid long-op would abort at the timeout yet may still be charged.
+   */
+  readonly longRunning: boolean;
 }
 
 export interface CostPlanStep {
   readonly api: string;
   readonly path: string;
   readonly expectedCalls: number;
+  /** Optional HTTP method, to disambiguate endpoints that share a path when pricing. */
+  readonly method?: string;
 }
 
 export interface CostEstimate {
   readonly estimatedCents: Cents;
-  readonly breakdown: readonly { api: string; path: string; cents: Cents }[];
+  readonly breakdown: readonly { api: string; path: string; cents: Cents; dynamic: boolean }[];
   /** True if any step's price was unknown and assumed; estimate is a lower bound. */
   readonly hasUnknownPrices: boolean;
+  /**
+   * True if any step prices dynamically. The estimate is then a FLOOR, not exact, so
+   * the gate must require explicit approval before spending (final charge may be higher).
+   */
+  readonly hasDynamicPricing: boolean;
 }
 
 /**

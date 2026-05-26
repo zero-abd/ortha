@@ -12,6 +12,7 @@ import {
   type OrthogonalClient,
   type PermissionResponse,
   type ReservationId,
+  type SideEffectClass,
   type ToolApi,
   type TraceEvent,
   type WorkspaceId,
@@ -73,6 +74,12 @@ interface ToolCallRequest {
   readonly args: Record<string, unknown>;
 }
 
+/** What get_tool_details recorded about an endpoint, used to gate the later run. */
+interface EndpointInfo {
+  readonly sideEffect: SideEffectClass;
+  readonly longRunning: boolean;
+}
+
 /**
  * The portable orchestration loop. A pure async generator driven entirely by the
  * injected ports — no Cloudflare, no Durable Object coupling. Yields the TraceEvent
@@ -85,6 +92,10 @@ export async function* runAgentTurn(deps: AgentDeps, input: AgentInput): AsyncIt
   const messages: LLMMessage[] = [...input.messages];
   let sessionCents = 0;
   let stepCounter = 0;
+  // Side-effect class per endpoint, recorded as the model inspects tools with
+  // get_tool_details. run() reads it (gateway-authoritative, not model-asserted) to
+  // gate genuine writes behind a confirmation modal.
+  const sideEffects = new Map<string, EndpointInfo>();
 
   try {
     for (let iteration = 0; iteration < maxIterations; iteration++) {
@@ -140,7 +151,7 @@ export async function* runAgentTurn(deps: AgentDeps, input: AgentInput): AsyncIt
 
       // ── 3. Dispatch each requested tool call. ──
       for (const call of pending) {
-        const result = yield* dispatch(deps, call, ++stepCounter, sessionCents);
+        const result = yield* dispatch(deps, call, ++stepCounter, sessionCents, sideEffects);
         if (result.kind === "cancelled") {
           await checkpoint(deps, messages, stepCounter, sessionCents);
           yield { type: "done", stopReason: "end" };
@@ -173,14 +184,15 @@ async function* dispatch(
   call: ToolCallRequest,
   stepId: number,
   sessionCents: number,
+  sideEffects: Map<string, EndpointInfo>,
 ): AsyncGenerator<TraceEvent, DispatchResult> {
   switch (call.name) {
     case SEARCH_TOOLS:
       return yield* dispatchSearch(deps, call, sessionCents);
     case GET_TOOL_DETAILS:
-      return yield* dispatchDetails(deps, call, sessionCents);
+      return yield* dispatchDetails(deps, call, sessionCents, sideEffects);
     case RUN_TOOL:
-      return yield* dispatchRun(deps, call, stepId, sessionCents);
+      return yield* dispatchRun(deps, call, stepId, sessionCents, sideEffects);
     case EXPAND_RESULT:
       return yield* dispatchExpand(deps, call, sessionCents);
     default:
@@ -203,6 +215,7 @@ async function* dispatchDetails(
   deps: AgentDeps,
   call: ToolCallRequest,
   sessionCents: number,
+  sideEffects: Map<string, EndpointInfo>,
 ): AsyncGenerator<TraceEvent, DispatchResult> {
   const api = asString(call.args["api"]);
   const path = asString(call.args["path"]);
@@ -210,6 +223,8 @@ async function* dispatchDetails(
     return { kind: "ok", sessionCents, toolContent: "get_tool_details requires both 'api' and 'path'." };
   }
   const details = await deps.orthogonal.getDetails(api, path);
+  // Record the authoritative gate info so dispatchRun can gate a write or refuse a long-op.
+  sideEffects.set(`${api} ${path}`, { sideEffect: details.sideEffect, longRunning: details.longRunning });
   return { kind: "ok", sessionCents, toolContent: JSON.stringify(details) };
 }
 
@@ -229,6 +244,7 @@ async function* dispatchRun(
   call: ToolCallRequest,
   stepId: number,
   sessionCents: number,
+  sideEffects: Map<string, EndpointInfo>,
 ): AsyncGenerator<TraceEvent, DispatchResult> {
   const api = asString(call.args["api"]);
   const path = asString(call.args["path"]);
@@ -237,15 +253,36 @@ async function* dispatchRun(
   }
   const body = asRecord(call.args["body"]);
   const query = asStringRecord(call.args["query"]);
+  const method = asString(call.args["method"]);
   const stepLabel = `step_${stepId}`;
 
   // Deterministic, replay-safe idempotency key: stable request shape + this step.
   const baseKey = requestKey({ api, path, body, query });
   const idempotencyKey: IdempotencyKey = asIdempotencyKey(`${baseKey}::${stepLabel}`);
 
+  // Long-running submit→poll endpoints (crawls, deep research) can't finish in the 30s
+  // fetch window and would abort-but-charge. Refuse to auto-run and let the model pick a
+  // synchronous alternative. Gateway-authoritative — recorded by get_tool_details.
+  const info = sideEffects.get(`${api} ${path}`);
+  if (info?.longRunning) {
+    return {
+      kind: "ok",
+      sessionCents,
+      toolContent: `${api} ${path} is a long-running (submit→poll) endpoint and isn't auto-callable — it would time out at 30s and may still be charged. Pick a synchronous alternative.`,
+    };
+  }
+
   // ── Budget pre-flight ──
-  const estimate = await deps.orthogonal.estimateCost([{ api, path, expectedCalls: 1 }]);
+  const estimate = await deps.orthogonal.estimateCost([{ api, path, expectedCalls: 1, ...(method ? { method } : {}) }]);
   const estCents = estimate.estimatedCents;
+  // A dynamic price means estCents is a FLOOR, not the exact charge. We force an
+  // explicit approval even when the budget check would pass, so a "watch it spend"
+  // user okays a call that may settle higher than the meter shows.
+  const isDynamic = estimate.hasDynamicPricing;
+  // A genuine write always requires an explicit confirmation modal, regardless of cost.
+  // Read from the recorded getDetails classification — gateway-authoritative, so the
+  // model can't talk its way past the gate by mislabeling a call.
+  const isWrite = info?.sideEffect === "write";
   const decision = await deps.budget.checkEstimate(deps.workspaceId, deps.conversationId, estCents);
 
   if (decision.decision === "denied") {
@@ -257,23 +294,22 @@ async function* dispatchRun(
     return { kind: "cancelled" };
   }
 
-  if (decision.decision === "permission_required") {
-    yield {
-      type: "permission_required",
+  if (decision.decision === "permission_required" || isDynamic || isWrite) {
+    // A write escalates to the side-effect modal (names the action + target + cost);
+    // otherwise it's an inline cost chip.
+    const kind: "cost" | "side_effect" = isWrite ? "side_effect" : "cost";
+    const gate = {
+      type: "permission_required" as const,
       stepId: stepLabel,
-      kind: "cost",
+      kind,
       estCents,
       sessionCents: decision.sessionSpentCents,
       capCents: decision.sessionCapCents,
+      ...(isWrite ? { action: `${(method ?? "Call").toUpperCase()} ${api} ${path}`, target: api } : {}),
+      ...(isDynamic && !isWrite ? { dynamic: true } : {}),
     };
-    const response = await deps.requestPermission({
-      type: "permission_required",
-      stepId: stepLabel,
-      kind: "cost",
-      estCents,
-      sessionCents: decision.sessionSpentCents,
-      capCents: decision.sessionCapCents,
-    });
+    yield gate;
+    const response = await deps.requestPermission(gate);
 
     switch (response.decision) {
       case "skip":
