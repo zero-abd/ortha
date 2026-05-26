@@ -1,4 +1,5 @@
 import type { PermissionResponse, TraceEvent } from "@ortha/contracts";
+import { getWorkspaceId } from "./lib/config.ts";
 import type { TurnDeps } from "./mock/transport.ts";
 
 export interface LiveDeps extends TurnDeps {
@@ -13,7 +14,8 @@ export interface LiveDeps extends TurnDeps {
 export function runLiveTurn(text: string, deps: LiveDeps, apiBase: string): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const wsBase = apiBase.replace(/^http/, "ws");
-    const ws = new WebSocket(`${wsBase}/api/conversations/${encodeURIComponent(deps.conversationId)}/stream`);
+    const wsId = encodeURIComponent(getWorkspaceId());
+    const ws = new WebSocket(`${wsBase}/api/conversations/${encodeURIComponent(deps.conversationId)}/stream?ws=${wsId}`);
     let opened = false;
     const openTimer = setTimeout(() => {
       if (!opened) {

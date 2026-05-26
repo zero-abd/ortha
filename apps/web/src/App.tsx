@@ -3,6 +3,7 @@ import type { PermissionResponse, TraceEvent } from "@ortha/contracts";
 import { ApprovalChip } from "./components/ApprovalChip.tsx";
 import { CostMeter } from "./components/CostMeter.tsx";
 import { RightPanel } from "./components/RightPanel.tsx";
+import { SettingsModal } from "./components/SettingsModal.tsx";
 import { SideEffectModal } from "./components/SideEffectModal.tsx";
 import { TraceBlock } from "./components/TraceBlock.tsx";
 import { useTheme } from "./lib/useTheme.ts";
@@ -34,6 +35,7 @@ export function App() {
   const [model, setModel] = useState(MODELS[0]);
   const [running, setRunning] = useState(false);
   const [draft, setDraft] = useState("");
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const rawStore = useRef(new Map<string, unknown>());
   const conversationId = useRef(crypto.randomUUID());
 
@@ -173,7 +175,7 @@ export function App() {
         <button className="iconbtn" onClick={toggle} aria-label="Toggle theme">
           {applied === "dark" ? "☀" : "☾"}
         </button>
-        <button className="iconbtn" aria-label="Settings">⚙</button>
+        <button className="iconbtn" aria-label="Settings" onClick={() => setSettingsOpen(true)}>⚙</button>
       </header>
 
       <div className="body">
@@ -215,6 +217,8 @@ export function App() {
           onCancel={() => pending.resolve({ stepId: pending.event.stepId, decision: "cancel" })}
         />
       )}
+
+      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
   );
 }

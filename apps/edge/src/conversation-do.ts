@@ -12,6 +12,7 @@ import type { ConversationStore } from "@ortha/contracts";
 import { createDemoPorts } from "./demo.js";
 import { doSqlAdapter } from "./do-sql.js";
 import type { Env } from "./env.js";
+import { buildLivePorts } from "./ports.js";
 
 const DEMO_WS: WorkspaceId = asWorkspaceId("demo-ws");
 const HISTORY_BUDGET_TOKENS = 8_000;
@@ -31,6 +32,7 @@ export class ConversationDO implements DurableObject {
   private readonly conversationId: ConversationId;
   private initialized = false;
   private running = false;
+  private workspaceId: WorkspaceId = DEMO_WS;
   private pendingPermission: ((r: PermissionResponse) => void) | null = null;
 
   constructor(
@@ -43,6 +45,8 @@ export class ConversationDO implements DurableObject {
   }
 
   async fetch(request: Request): Promise<Response> {
+    const wsParam = new URL(request.url).searchParams.get("ws");
+    if (wsParam && /^[a-zA-Z0-9_-]{6,64}$/.test(wsParam)) this.workspaceId = asWorkspaceId(wsParam);
     if (request.headers.get("Upgrade") !== "websocket") {
       return Response.json({ ok: true, durableObject: "ConversationDO", id: this.ctx.id.toString() });
     }
@@ -103,12 +107,16 @@ export class ConversationDO implements DurableObject {
     const history = await this.store.loadWindow(this.conversationId, HISTORY_BUDGET_TOKENS);
     const messages: LLMMessage[] = history.map((m) => ({ role: m.role, content: m.content }));
 
-    const ports = createDemoPorts(); // TODO(live): swap to real harness/LLM when BYOK keys exist (this.env).
-    void this.env;
+    // Live ports when this workspace has BYOK keys configured; demo otherwise.
+    const live = await buildLivePorts(this.env, this.workspaceId).catch(() => null);
+    const ports = live ?? { ...createDemoPorts(), model: "demo" };
     const deps: AgentDeps = {
-      ...ports,
-      model: "demo",
-      workspaceId: DEMO_WS,
+      llm: ports.llm,
+      orthogonal: ports.orthogonal,
+      budget: ports.budget,
+      memory: ports.memory,
+      model: ports.model,
+      workspaceId: this.workspaceId,
       conversationId: this.conversationId,
       requestPermission: (event) =>
         new Promise<PermissionResponse>((resolve) => {

@@ -1,9 +1,8 @@
+import { API } from "./lib/config.ts";
 import { runMockTurn, type TurnDeps } from "./mock/transport.ts";
 import { runLiveTurn } from "./live.ts";
 
-// Default to the deployed worker; override with VITE_ORTHA_API, or force the
-// offline mock with VITE_USE_MOCK=1.
-const API = (import.meta.env.VITE_ORTHA_API as string | undefined) ?? "https://ortha-edge.almahmud-zero.workers.dev";
+// Force the offline mock with VITE_USE_MOCK=1; otherwise stream live from the worker.
 const FORCE_MOCK = import.meta.env.VITE_USE_MOCK === "1";
 
 export interface RunDeps extends TurnDeps {

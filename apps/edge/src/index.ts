@@ -1,18 +1,15 @@
+import { handleApi } from "./api.js";
 import { ConversationDO } from "./conversation-do.js";
 import type { Env } from "./env.js";
+import { CORS, json } from "./http.js";
 
 // The DO class must be exported from the Worker entry for the binding to resolve.
 export { ConversationDO };
 
-const CORS = {
-  "access-control-allow-origin": "*",
-  "access-control-allow-methods": "GET,POST,OPTIONS",
-  "access-control-allow-headers": "content-type,authorization",
-};
-
 /**
- * Edge API Worker. Thin: routing + (future) auth; conversation work is delegated to
- * the per-conversation Durable Object, including the WebSocket /stream upgrade.
+ * Edge API Worker. Thin: routing + BYOK key/settings management; conversation work
+ * (including the WebSocket /stream upgrade and the agent loop) is delegated to the
+ * per-conversation Durable Object.
  */
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -24,12 +21,17 @@ export default {
       return json({ ok: true, service: "ortha-edge" });
     }
 
+    // BYOK keys + per-workspace settings.
+    const api = await handleApi(request, env, url);
+    if (api) return api;
+
     // Mint a conversation id; the DO is created lazily on first /stream connect.
     if (url.pathname === "/api/conversations" && request.method === "POST") {
       return json({ id: crypto.randomUUID() }, 201);
     }
 
-    // WebSocket stream for a conversation → its Durable Object.
+    // WebSocket stream for a conversation → its Durable Object. The ?ws=<workspace>
+    // query (and the path id) are forwarded to the DO, which reads them for BYOK.
     const stream = url.pathname.match(/^\/api\/conversations\/([^/]+)\/stream$/);
     if (stream) {
       const name = decodeURIComponent(stream[1]!);
@@ -40,10 +42,3 @@ export default {
     return new Response("Ortha edge", { status: 200, headers: CORS });
   },
 } satisfies ExportedHandler<Env>;
-
-function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json", ...CORS },
-  });
-}

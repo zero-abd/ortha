@@ -2,7 +2,7 @@
 // in Node 22 and Cloudflare Workers — no native crypto deps, no Buffer.
 
 const subtle = (): SubtleCrypto => {
-  const c = globalThis.crypto;
+  const c = crypto;
   if (!c?.subtle) throw new Error("WebCrypto (crypto.subtle) is not available in this runtime");
   return c.subtle;
 };
@@ -29,7 +29,7 @@ export const bytesToUtf8 = (b: Uint8Array): string => dec.decode(b);
 
 export function randomBytes(length: number): Uint8Array {
   const out = new Uint8Array(length);
-  globalThis.crypto.getRandomValues(out);
+  crypto.getRandomValues(out);
   return out;
 }
 
