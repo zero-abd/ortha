@@ -21,7 +21,7 @@ const DEFAULT_SETTINGS: ApiSettings = {
   sessionCapCents: 500,
   perCallWarnCents: 25,
   monthlyCapCents: 10_000,
-  model: "gemini-2.0-flash",
+  model: "gemini-2.5-flash",
   theme: "system",
   cacheTtlSeconds: 300,
 };

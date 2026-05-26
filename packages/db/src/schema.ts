@@ -47,7 +47,11 @@ export const SCHEMA_STATEMENTS: readonly string[] = [
     content        TEXT NOT NULL,
     createdAt      INTEGER NOT NULL,
     seq            INTEGER NOT NULL,
-    toolCallIds    TEXT NOT NULL DEFAULT '[]'
+    toolCallIds    TEXT NOT NULL DEFAULT '[]',
+    -- JSON tool metadata for faithful transcript replay: assistant tool_calls
+    -- (id+name+args) or a tool result's {toolCallId,toolName}. Enables cross-turn
+    -- expand_result by keeping requestId-bearing tool messages in history.
+    toolMeta       TEXT NOT NULL DEFAULT '{}'
   )`,
   // Ordering within a conversation is (createdAt, seq); seq breaks ties for
   // messages appended in the same millisecond, keeping loadWindow deterministic.
@@ -127,7 +131,23 @@ export const SCHEMA_STATEMENTS: readonly string[] = [
 /** The full schema as one script (handy for D1 migrations / `exec`). */
 export const SCHEMA_SQL: string = SCHEMA_STATEMENTS.map((s) => `${s};`).join("\n\n");
 
-/** Apply the schema to a synchronous {@link SqlDb}. Idempotent (IF NOT EXISTS). */
+/**
+ * Idempotent column additions for databases created before a column existed.
+ * SQLite has no `ADD COLUMN IF NOT EXISTS`, so each runs in a try/catch and a
+ * "duplicate column" error on an already-migrated DB is expected and ignored.
+ */
+const MIGRATION_STATEMENTS: readonly string[] = [
+  `ALTER TABLE messages ADD COLUMN toolMeta TEXT NOT NULL DEFAULT '{}'`,
+];
+
+/** Apply the schema to a synchronous {@link SqlDb}. Idempotent (IF NOT EXISTS + guarded migrations). */
 export function applySchema(db: SqlDb): void {
   for (const stmt of SCHEMA_STATEMENTS) db.run(stmt);
+  for (const stmt of MIGRATION_STATEMENTS) {
+    try {
+      db.run(stmt);
+    } catch {
+      // Column already present (table predates this migration's CREATE) — fine.
+    }
+  }
 }

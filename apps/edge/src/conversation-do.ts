@@ -13,6 +13,7 @@ import { createDemoPorts } from "./demo.js";
 import { doSqlAdapter } from "./do-sql.js";
 import type { Env } from "./env.js";
 import { buildLivePorts } from "./ports.js";
+import { createSqlRawStore, RAW_BLOBS_DDL } from "./raw-store.js";
 import { DurableSpendStore, SESSION_SPEND_DDL, WORKSPACE_SPEND_DDL } from "./spend-store.js";
 
 const DEMO_WS: WorkspaceId = asWorkspaceId("demo-ws");
@@ -77,6 +78,8 @@ export class ConversationDO implements DurableObject {
       applySchema(this.db);
       // DO-local per-conversation session spend (accumulates across turns).
       this.db.run(SESSION_SPEND_DDL);
+      // DO-local durable, size-capped raw tool-result blobs (cross-turn expand_result).
+      this.db.run(RAW_BLOBS_DDL);
       // D1 cross-conversation workspace monthly spend.
       await d1Adapter(this.env.DB).run(WORKSPACE_SPEND_DDL);
     });
@@ -86,7 +89,11 @@ export class ConversationDO implements DurableObject {
   private async sendHistory(ws: WebSocket): Promise<void> {
     await this.init();
     const msgs = await this.store.loadWindow(this.conversationId, HISTORY_BUDGET_TOKENS);
-    ws.send(JSON.stringify({ type: "history", messages: msgs.map((m) => ({ role: m.role, content: m.content })) }));
+    // The transcript now includes tool-call plumbing (assistant tool-call turns +
+    // tool results) for cross-turn expand. The UI only wants real chat turns, so
+    // show user messages and assistant messages that actually said something.
+    const visible = msgs.filter((m) => m.role === "user" || (m.role === "assistant" && m.content.trim().length > 0));
+    ws.send(JSON.stringify({ type: "history", messages: visible.map((m) => ({ role: m.role, content: m.content })) }));
   }
 
   private async onMessage(ws: WebSocket, ev: MessageEvent): Promise<void> {
@@ -157,7 +164,17 @@ export class ConversationDO implements DurableObject {
     await this.registerConversation(text.slice(0, 60)).catch(() => {});
 
     const history = await this.store.loadWindow(this.conversationId, HISTORY_BUDGET_TOKENS);
-    const messages: LLMMessage[] = history.map((m) => ({ role: m.role, content: m.content }));
+    // Rehydrate the full transcript (incl. tool calls + results with requestIds) so the
+    // model can expand_result a prior turn's call. Start at the first user message so the
+    // window never opens on an orphan tool result whose assistant tool_call was trimmed.
+    const rehydrated: LLMMessage[] = history.map((m) => ({
+      role: m.role,
+      content: m.content,
+      ...(m.toolCalls ? { toolCalls: m.toolCalls } : {}),
+      ...(m.toolCallId ? { toolCallId: m.toolCallId } : {}),
+      ...(m.toolName ? { toolName: m.toolName } : {}),
+    }));
+    const messages: LLMMessage[] = sanitizeTranscript(rehydrated);
 
     // Durable spend store: workspace monthly spend in D1, session spend in this DO's
     // SQLite. Seeded with the workspace's monthly cap so `remaining()` is correct.
@@ -167,9 +184,12 @@ export class ConversationDO implements DurableObject {
       doSql: this.db,
       monthlyCapCents,
     });
+    // Durable, size-capped raw-result store backed by this DO's SQLite, so raw tool
+    // results survive across turns (expand_result) and oversized blobs are truncated.
+    const rawStore = createSqlRawStore(this.db);
 
     // Live ports when this workspace has BYOK keys configured; demo otherwise.
-    const live = await buildLivePorts(this.env, this.workspaceId, spendStore).catch(() => null);
+    const live = await buildLivePorts(this.env, this.workspaceId, spendStore, rawStore).catch(() => null);
     const ports = live ?? { ...createDemoPorts(), model: "demo" };
     const deps: AgentDeps = {
       llm: ports.llm,
@@ -187,17 +207,61 @@ export class ConversationDO implements DurableObject {
       checkpoint: async (state) => {
         await this.ctx.storage.put("step", state.step);
       },
+      // Persist the full turn transcript as the loop produces it (assistant tool-call
+      // turns + tool results, then the final answer). This is what makes cross-turn
+      // expand_result reachable: a later turn reloads the requestId-bearing tool
+      // messages. The user message was already persisted above.
+      onMessage: async (m) => {
+        await this.store.appendMessage({
+          conversationId: this.conversationId,
+          role: m.role,
+          content: m.content,
+          ...(m.toolCalls ? { toolCalls: m.toolCalls } : {}),
+          ...(m.toolCallId ? { toolCallId: m.toolCallId } : {}),
+          ...(m.toolName ? { toolName: m.toolName } : {}),
+        });
+      },
     };
 
-    let answer = "";
     try {
       for await (const event of runAgentTurn(deps, { messages })) {
-        if (event.type === "token") answer += event.text;
         ws.send(JSON.stringify(event));
       }
     } catch (e) {
       ws.send(JSON.stringify({ type: "error", code: "PROVIDER_DOWN", message: e instanceof Error ? e.message : "loop error" }));
     }
-    await this.store.appendMessage({ conversationId: this.conversationId, role: "assistant", content: answer });
   }
+}
+
+/**
+ * Make a rehydrated transcript safe to replay to any provider. The window can open
+ * mid-turn (token budget trimmed older messages) or end on a turn that was cancelled
+ * mid-dispatch, either of which leaves an orphan: a tool result with no declaring
+ * assistant tool_call, or an assistant tool_call with no result. Both are rejected
+ * by OpenAI and Anthropic. We keep only matched assistant↔tool pairs.
+ */
+function sanitizeTranscript(msgs: readonly LLMMessage[]): LLMMessage[] {
+  const firstUser = msgs.findIndex((m) => m.role === "user");
+  const window = firstUser > 0 ? msgs.slice(firstUser) : msgs;
+  // A tool_call is replayable only if a tool result for its id exists in the window.
+  const answered = new Set(
+    window.filter((m) => m.role === "tool" && m.toolCallId).map((m) => m.toolCallId as string),
+  );
+  const out: LLMMessage[] = [];
+  const declared = new Set<string>();
+  for (const m of window) {
+    if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
+      const kept = m.toolCalls.filter((tc) => answered.has(tc.id));
+      for (const tc of kept) declared.add(tc.id);
+      if (kept.length === m.toolCalls.length) out.push(m);
+      else if (kept.length > 0) out.push({ role: "assistant", content: m.content, toolCalls: kept });
+      else if (m.content.trim().length > 0) out.push({ role: "assistant", content: m.content });
+      // else: an unanswered, contentless tool-call turn — drop it entirely.
+    } else if (m.role === "tool") {
+      if (m.toolCallId && declared.has(m.toolCallId)) out.push(m); // drop orphan results
+    } else {
+      out.push(m);
+    }
+  }
+  return out;
 }

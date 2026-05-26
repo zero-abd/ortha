@@ -8,7 +8,7 @@ import {
 } from "@ortha/contracts";
 import { createBudgetPolicy, InMemorySpendStore, type SpendStorePort } from "@ortha/budget";
 import { DEFAULT_SETTINGS } from "@ortha/db";
-import { createMemoryStore, mapKvPort, type ConvSummaryState } from "@ortha/context";
+import { createMemoryStore, mapKvPort, type ConvSummaryState, type KvPort } from "@ortha/context";
 import { createOrthogonalClient, distill } from "@ortha/harness";
 import { createAnthropicProvider, createOpenAICompatProvider, defaultModelRegistry } from "@ortha/llm";
 import type { Env } from "./env.js";
@@ -37,6 +37,7 @@ export async function buildLivePorts(
   env: Env,
   ws: WorkspaceId,
   spendStore?: SpendStorePort,
+  rawStore?: KvPort<unknown>,
 ): Promise<AgentPorts | null> {
   const vault = await createKeyVault({ masterKeyBase64: env.KEY_ENCRYPTION_KEY, store: kvStore(env.KV) });
 
@@ -71,8 +72,10 @@ export async function buildLivePorts(
     store: spendStore ?? new InMemorySpendStore(() => monthlyCapCents),
     settings: { sessionCapCents, monthlyCapCents, perCallWarnCents },
   });
+  // Durable, size-capped raw store (DO SQLite) when the DO supplies one; else the
+  // in-memory per-turn Map. summaryStore stays in-memory for now.
   const memory = createMemoryStore({
-    rawStore: mapKvPort<unknown>(),
+    rawStore: rawStore ?? mapKvPort<unknown>(),
     summaryStore: mapKvPort<ConvSummaryState>(),
     summarize: async (text: string) => distill(text).summary,
   });

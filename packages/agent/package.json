@@ -14,5 +14,8 @@
   "dependencies": {
     "@ortha/contracts": "workspace:*",
     "@ortha/harness": "workspace:*"
+  },
+  "devDependencies": {
+    "@ortha/budget": "workspace:*"
   }
 }

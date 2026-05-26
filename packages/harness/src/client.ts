@@ -2,6 +2,7 @@ import {
   asRequestId,
   ErrorCode,
   OrthaError,
+  DetailsResponseSchema,
   RunResponseSchema,
   SearchResponseSchema,
   type Cents,
@@ -11,7 +12,6 @@ import {
   type RunInput,
   type RunResult,
   type SearchInput,
-  type SideEffectClass,
   type ToolApi,
   type ToolDetails,
 } from "@ortha/contracts";
@@ -45,10 +45,19 @@ export function createOrthogonalClient(deps: OrthogonalClientDeps): OrthogonalCl
   const priceIndex = deps.priceIndex ?? new Map<string, Cents>();
   const priceKey = (api: string, path: string): string => `${api} ${path}`;
 
-  async function post(pathname: string, payload: unknown, extraHeaders: Record<string, string> = {}): Promise<unknown> {
+  // `retries` defaults to the client-wide maxRetries. Paid /run passes 0: the
+  // Orthogonal server does NOT honor idempotency-key (verified against the live
+  // API — identical keys produce distinct requestIds and charge twice), so a
+  // retry after an ambiguous timeout/5xx would double-charge. Reads stay retryable.
+  async function post(
+    pathname: string,
+    payload: unknown,
+    extraHeaders: Record<string, string> = {},
+    retries: number = maxRetries,
+  ): Promise<unknown> {
     const apiKey = await deps.getApiKey();
     let lastErr: OrthaError | undefined;
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    for (let attempt = 0; attempt <= retries; attempt++) {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), timeoutMs);
       try {
@@ -65,7 +74,7 @@ export function createOrthogonalClient(deps: OrthogonalClientDeps): OrthogonalCl
         clearTimeout(timer);
         if (res.ok) return await res.json();
         const err = await httpError(res);
-        if (err.retryable && attempt < maxRetries) {
+        if (err.retryable && attempt < retries) {
           lastErr = err;
           await sleep(backoffMs(attempt));
           continue;
@@ -74,7 +83,7 @@ export function createOrthogonalClient(deps: OrthogonalClientDeps): OrthogonalCl
       } catch (e) {
         clearTimeout(timer);
         if (e instanceof OrthaError) {
-          if (e.retryable && attempt < maxRetries) {
+          if (e.retryable && attempt < retries) {
             lastErr = e;
             await sleep(backoffMs(attempt));
             continue;
@@ -88,7 +97,7 @@ export function createOrthogonalClient(deps: OrthogonalClientDeps): OrthogonalCl
           aborted ? `request timed out after ${timeoutMs}ms` : `network error`,
           { retryable: true, cause: e },
         );
-        if (attempt < maxRetries) {
+        if (attempt < retries) {
           lastErr = err;
           await sleep(backoffMs(attempt));
           continue;
@@ -102,6 +111,8 @@ export function createOrthogonalClient(deps: OrthogonalClientDeps): OrthogonalCl
   function indexPrices(apis: readonly ToolApi[]): void {
     for (const api of apis) {
       for (const ep of api.endpoints) {
+        // Live search results no longer include a price; only index when present.
+        if (ep.price === undefined) continue;
         const cents = priceToCents(ep.price);
         if (cents !== null) priceIndex.set(priceKey(api.slug, ep.path), cents);
       }
@@ -117,22 +128,27 @@ export function createOrthogonalClient(deps: OrthogonalClientDeps): OrthogonalCl
     },
 
     async getDetails(api: string, path: string): Promise<ToolDetails> {
-      const raw = (await post("/details", { api, path })) as Record<string, unknown>;
-      const priceStr = typeof raw["price"] === "string" ? (raw["price"] as string) : null;
-      const cents = priceStr ? priceToCents(priceStr) : priceIndex.get(priceKey(api, path)) ?? 0;
-      if (priceStr) {
-        const c = priceToCents(priceStr);
-        if (c !== null) priceIndex.set(priceKey(api, path), c);
-      }
+      // Real shape: the endpoint spec is nested under `endpoint`, `price` is a
+      // numeric dollar amount, and params are split across query/body/path.
+      const parsed = DetailsResponseSchema.parse(await post("/details", { api, path }));
+      const ep = parsed.endpoint;
+      // Price comes as dollars (e.g. 0.03). Prefer it; fall back to any indexed price.
+      const cents = ep.price !== undefined ? Math.round(ep.price * 100) : priceIndex.get(priceKey(api, path)) ?? 0;
+      // Index it so estimateCost can price this endpoint after a details lookup.
+      if (ep.price !== undefined) priceIndex.set(priceKey(api, path), cents);
+      const inputSchema = ep.bodyParams?.length || ep.queryParams?.length || ep.pathParams?.length
+        ? { query: ep.queryParams ?? [], body: ep.bodyParams ?? [], path: ep.pathParams ?? [] }
+        : null;
       return {
         api,
         path,
-        method: typeof raw["method"] === "string" ? (raw["method"] as string) : "POST",
-        inputSchema: raw["inputSchema"] ?? raw["parameters"] ?? null,
-        outputSchema: raw["outputSchema"] ?? raw["responseSchema"] ?? null,
-        priceCents: cents ?? 0,
-        verified: raw["verified"] === true,
-        sideEffect: normalizeSideEffect(raw["sideEffect"] ?? raw["method"]),
+        method: ep.method,
+        inputSchema,
+        outputSchema: null,
+        priceCents: cents,
+        verified: parsed.api?.verified === true,
+        // GET is a read; anything else may mutate — treat as write so the gate is cautious.
+        sideEffect: ep.method.toUpperCase() === "GET" ? "read" : "write",
       };
     },
 
@@ -152,6 +168,7 @@ export function createOrthogonalClient(deps: OrthogonalClientDeps): OrthogonalCl
               "/run",
               { api: input.api, path: input.path, body: input.body, query: input.query },
               { "idempotency-key": input.idempotencyKey },
+              0, // paid mutation: never auto-retry (server doesn't dedupe → would double-charge)
             );
             const parsed = RunResponseSchema.parse(raw);
             return {
@@ -217,12 +234,6 @@ function priceToCents(price: string): Cents | null {
   const dollars = Number.parseFloat(price);
   if (Number.isNaN(dollars)) return null;
   return Math.round(dollars * 100);
-}
-
-function normalizeSideEffect(v: unknown): SideEffectClass {
-  if (v === "read" || v === "write") return v;
-  if (typeof v === "string" && v.toUpperCase() === "GET") return "read";
-  return "unknown";
 }
 
 const backoffMs = (attempt: number): number => Math.min(2_000, 250 * 2 ** attempt);

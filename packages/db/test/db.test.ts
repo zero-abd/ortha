@@ -73,6 +73,35 @@ describe("conversation + message CRUD", () => {
     expect(all.map((m) => m.content)).toEqual(["hi", "hello"]); // chronological
     expect(all[1]?.toolCallIds).toEqual([tc]);
   });
+
+  it("round-trips the tool transcript (assistant toolCalls + tool result name/id) for cross-turn expand", async () => {
+    const { store } = makeStore();
+    const conv = await store.createConversation(WS, "C");
+
+    await store.appendMessage({ conversationId: conv.id, role: "user", content: "scrape example.com" });
+    await store.appendMessage({
+      conversationId: conv.id,
+      role: "assistant",
+      content: "",
+      toolCalls: [{ id: "call_1", name: "run_tool", args: { api: "ctx", path: "/scrape" } }],
+    });
+    await store.appendMessage({
+      conversationId: conv.id,
+      role: "tool",
+      content: "ctx /scrape -> Example Domain (requestId: run_X)",
+      toolCallId: "call_1",
+      toolName: "run_tool",
+    });
+
+    const all = await store.loadWindow(conv.id, 1_000_000);
+    const asst = all.find((m) => m.role === "assistant");
+    expect(asst?.toolCalls).toEqual([{ id: "call_1", name: "run_tool", args: { api: "ctx", path: "/scrape" } }]);
+    const tool = all.find((m) => m.role === "tool");
+    expect(tool?.toolCallId).toBe("call_1");
+    expect(tool?.toolName).toBe("run_tool");
+    // The requestId survives in the tool content, so a later turn can expand_result it.
+    expect(tool?.content).toContain("run_X");
+  });
 });
 
 describe("tool calls", () => {

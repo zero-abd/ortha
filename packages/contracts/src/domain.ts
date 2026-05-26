@@ -13,7 +13,7 @@ import type {
 export type Cents = number;
 
 export type Role = "owner" | "admin" | "member";
-export type MessageRole = "user" | "assistant" | "system";
+export type MessageRole = "user" | "assistant" | "system" | "tool";
 
 /** Lifecycle of a single tool execution, mirrored in the durable call journal. */
 export type ToolCallStatus = "pending" | "settled" | "unknown" | "failed";
@@ -53,6 +53,16 @@ export interface Message {
   readonly createdAt: number;
   /** Tool calls produced while generating this (assistant) message. */
   readonly toolCallIds: readonly ToolCallId[];
+  /**
+   * role==="assistant": the full tool calls this turn requested (id + name + args),
+   * so the transcript replays faithfully and the model can `expand_result` a prior
+   * call across turns.
+   */
+  readonly toolCalls?: readonly { readonly id: string; readonly name: string; readonly args: Record<string, unknown> }[];
+  /** role==="tool": which assistant tool_call this result answers. */
+  readonly toolCallId?: string;
+  /** role==="tool": the tool's name (providers like Gemini require it on the result). */
+  readonly toolName?: string;
 }
 
 export interface ToolCall {

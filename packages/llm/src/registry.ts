@@ -10,31 +10,22 @@ import type { ModelInfo, ModelRegistry } from "@ortha/contracts";
 const MODELS: readonly ModelInfo[] = [
   // --- Gemini (OpenAI-compat). Free tier available; tool-capable. ---
   {
-    id: "gemini-2.0-flash",
+    id: "gemini-2.5-flash",
     provider: "gemini",
-    displayName: "Gemini 2.0 Flash",
-    inputPerMTokensCents: 0,
-    outputPerMTokensCents: 0,
+    displayName: "Gemini 2.5 Flash",
+    inputPerMTokensCents: 30, // ~$0.30 / Mtok
+    outputPerMTokensCents: 250, // ~$2.50 / Mtok
     supportsToolUse: true,
     free: true,
   },
   {
-    id: "gemini-1.5-flash",
+    id: "gemini-2.5-flash-lite",
     provider: "gemini",
-    displayName: "Gemini 1.5 Flash",
-    inputPerMTokensCents: 0,
-    outputPerMTokensCents: 0,
+    displayName: "Gemini 2.5 Flash-Lite",
+    inputPerMTokensCents: 10, // ~$0.10 / Mtok
+    outputPerMTokensCents: 40, // ~$0.40 / Mtok
     supportsToolUse: true,
     free: true,
-  },
-  {
-    id: "gemini-1.5-pro",
-    provider: "gemini",
-    displayName: "Gemini 1.5 Pro",
-    inputPerMTokensCents: 125, // ~$1.25 / Mtok
-    outputPerMTokensCents: 500, // ~$5.00 / Mtok
-    supportsToolUse: true,
-    free: false,
   },
 
   // --- Anthropic (native adapter). ---
@@ -89,7 +80,7 @@ const MODELS: readonly ModelInfo[] = [
   },
 ];
 
-const DEFAULT_MODEL_ID = "gemini-2.0-flash";
+const DEFAULT_MODEL_ID = "gemini-2.5-flash";
 
 export interface CreateModelRegistryOptions {
   /** Replace the curated list entirely (advanced / testing). */

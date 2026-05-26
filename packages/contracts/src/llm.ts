@@ -15,8 +15,16 @@ export interface LLMMessage {
   readonly content: string;
   /** Set when role === "tool": which tool_call_request this result answers. */
   readonly toolCallId?: string;
-  /** Set when an assistant message requested tool calls (provider-native ids). */
-  readonly toolCallIds?: readonly string[];
+  /** Set when role === "tool": the tool's name. Required when replaying to providers
+   *  (Gemini's OpenAI-compat layer rejects a function_response with an empty name). */
+  readonly toolName?: string;
+  /**
+   * Set on an assistant message that requested tool calls. Carries the full call
+   * (id + name + args) so the turn can be faithfully replayed to the provider — an
+   * assistant turn that omits its tool_calls makes the following tool result an
+   * orphan, which every provider rejects.
+   */
+  readonly toolCalls?: readonly { readonly id: string; readonly name: string; readonly args: Record<string, unknown> }[];
 }
 
 /** Normalized streaming event. Every adapter maps its native stream to this union. */

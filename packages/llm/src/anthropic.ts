@@ -163,6 +163,15 @@ function toAnthropicMessages(messages: readonly LLMMessage[]): unknown[] {
       });
       continue;
     }
+    if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
+      // Re-emit tool_use blocks; a following tool_result must reference a tool_use
+      // in the preceding assistant turn or Anthropic rejects the request.
+      const blocks: unknown[] = [];
+      if (m.content) blocks.push({ type: "text", text: m.content });
+      for (const tc of m.toolCalls) blocks.push({ type: "tool_use", id: tc.id, name: tc.name, input: tc.args });
+      out.push({ role: "assistant", content: blocks });
+      continue;
+    }
     out.push({ role: m.role, content: m.content });
   }
   return out;

@@ -51,6 +51,9 @@
         "@ortha/contracts": "workspace:*",
         "@ortha/harness": "workspace:*",
       },
+      "devDependencies": {
+        "@ortha/budget": "workspace:*",
+      },
     },
     "packages/auth": {
       "name": "@ortha/auth",
