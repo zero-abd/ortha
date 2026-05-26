@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { deleteKey, getSettings, listKeys, putKey, putSettings, type ApiSettings, type KeyMeta } from "../lib/api.ts";
+import { Dropdown } from "./Dropdown.tsx";
 
 const PROVIDERS = [
   { id: "orthogonal", label: "Orthogonal API key", placeholder: "orth_live_…" },
@@ -84,11 +85,13 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
         <div className="settings__body">
           <div className="settings__section">
             <span className="settings__label">Model</span>
-            <select className="select input" value={settings.model} onChange={(e) => setSettings((s) => ({ ...s, model: e.target.value }))}>
-              {MODELS.map((m) => (
-                <option key={m.id} value={m.id}>{m.label}</option>
-              ))}
-            </select>
+            <Dropdown
+              value={settings.model}
+              options={MODELS.map((m) => ({ value: m.id, label: m.label }))}
+              onChange={(v) => setSettings((s) => ({ ...s, model: v }))}
+              ariaLabel="Model"
+              block
+            />
             <div className="settings__row">
               <div className="field">
                 <span className="settings__label">Session cap ($)</span>

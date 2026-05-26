@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { PermissionResponse, TraceEvent } from "@ortha/contracts";
 import { ApprovalChip } from "./components/ApprovalChip.tsx";
 import { CostMeter } from "./components/CostMeter.tsx";
+import { Dropdown } from "./components/Dropdown.tsx";
 import { Logo, Spinner } from "./components/Logo.tsx";
 import { RightPanel } from "./components/RightPanel.tsx";
 import { SettingsModal } from "./components/SettingsModal.tsx";
@@ -230,7 +231,6 @@ export function App() {
             <span>Session</span>
             <span className="balance__amt">${(cost.sessionCents / 100).toFixed(2)} / ${(cost.capCents / 100).toFixed(2)}</span>
           </div>
-          <a className="credits" href="https://orthogonal.com" target="_blank" rel="noreferrer">Get free credits ↗</a>
           <button className="acct" onClick={() => setSettingsOpen(true)} aria-label="Account and settings">
             <span className="acct__avatar">A</span>
             <span className="acct__name">Abdullah Al Mahmud</span>
@@ -243,7 +243,7 @@ export function App() {
         <header className="main__top">
           <span className="main__spacer" />
           {!empty && <CostMeter sessionCents={cost.sessionCents} capCents={cost.capCents} breakdown={breakdown} />}
-          <Select value={model} options={MODELS} onChange={setModel} ariaLabel="Model" />
+          <Dropdown value={model} options={MODELS.map((m) => ({ value: m, label: m }))} onChange={setModel} ariaLabel="Model" />
           <button className="iconbtn" onClick={toggle} aria-label="Toggle theme">{applied === "dark" ? "☀" : "☾"}</button>
         </header>
 
@@ -372,19 +372,6 @@ function AskBox({ value, onChange, onSend, disabled, autoFocus }: { value: strin
       />
       <button className="ask__send" onClick={onSend} disabled={disabled} aria-label="Send">↑</button>
     </div>
-  );
-}
-
-function Select({ value, options, onChange, ariaLabel }: { value: string; options: string[]; onChange: (v: string) => void; ariaLabel: string }) {
-  return (
-    <span className="select model-select">
-      <select className="select" aria-label={ariaLabel} value={value} onChange={(e) => onChange(e.target.value)}>
-        {options.map((o) => (
-          <option key={o} value={o}>{o}</option>
-        ))}
-      </select>
-      <span className="select__caret caret">▾</span>
-    </span>
   );
 }
 
