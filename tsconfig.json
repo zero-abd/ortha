@@ -1,0 +1,13 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/contracts" },
+    { "path": "packages/harness" },
+    { "path": "packages/agent" },
+    { "path": "packages/llm" },
+    { "path": "packages/db" },
+    { "path": "packages/auth" },
+    { "path": "packages/budget" },
+    { "path": "packages/context" }
+  ]
+}

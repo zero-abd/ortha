@@ -38,6 +38,12 @@ lerna-debug.log*
 .parcel-cache/
 *.tsbuildinfo
 
+# Stray compiled TS artifacts (authored code is .ts only)
+**/test/**/*.js
+**/test/**/*.js.map
+**/test/**/*.d.ts
+**/test/**/*.d.ts.map
+
 # OS files
 .DS_Store
 Thumbs.db
@@ -52,6 +58,15 @@ desktop.ini
 
 # Claude Code
 .claude/
+
+# Codex
+.codex/
+.omx/
+
+# Cloudflare / Wrangler
+.wrangler/
+.dev.vars
+.dev.vars.*
 
 # Misc
 *.local
