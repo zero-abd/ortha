@@ -12,11 +12,19 @@ export const EndpointSchema = z.object({
   path: z.string(),
   method: z.string(),
   description: z.string(),
-  /** Cost per call as a decimal-string of dollars, e.g. "0.03". */
-  price: z.string(),
+  /**
+   * Optional. `/v1/search` results no longer carry a price — pricing is exposed
+   * per-endpoint via `/v1/details` (as a numeric dollar amount) and settled through
+   * the x402 micropayment rail. Kept here for any endpoint that does include it.
+   */
+  price: z.string().optional(),
   isPayable: z.boolean().optional(),
   verified: z.boolean().optional(),
   score: z.number().optional(),
+  /** x402 payment metadata present on live search results. */
+  chain: z.string().optional(),
+  token: z.string().optional(),
+  payableUrl: z.string().optional(),
 });
 export type Endpoint = z.infer<typeof EndpointSchema>;
 
@@ -25,6 +33,7 @@ export const ToolApiSchema = z.object({
   name: z.string(),
   slug: z.string(),
   baseUrl: z.string().optional(),
+  payableBaseUrl: z.string().optional(),
   endpoints: z.array(EndpointSchema),
 });
 export type ToolApi = z.infer<typeof ToolApiSchema>;
@@ -36,6 +45,36 @@ export const SearchResponseSchema = z.object({
   apisCount: z.number().optional(),
 });
 export type SearchResponse = z.infer<typeof SearchResponseSchema>;
+
+/**
+ * `/v1/details` response. The endpoint spec is nested under `endpoint`, and `price`
+ * is a numeric dollar amount (e.g. 0.03), not a string. Params are split across
+ * query/body/path. Unknown keys are stripped by zod.
+ */
+export const EndpointDetailSchema = z.object({
+  path: z.string(),
+  method: z.string(),
+  description: z.string().optional(),
+  isPayable: z.boolean().optional(),
+  price: z.number().optional(),
+  hasDynamicPricing: z.boolean().optional(),
+  pathParams: z.array(z.unknown()).optional(),
+  queryParams: z.array(z.unknown()).optional(),
+  bodyParams: z.array(z.unknown()).optional(),
+});
+export const DetailsResponseSchema = z.object({
+  success: z.boolean(),
+  api: z
+    .object({
+      slug: z.string(),
+      name: z.string().optional(),
+      baseUrl: z.string().optional(),
+      verified: z.boolean().optional(),
+    })
+    .optional(),
+  endpoint: EndpointDetailSchema,
+});
+export type DetailsResponse = z.infer<typeof DetailsResponseSchema>;
 
 export const RunResponseSchema = z.object({
   success: z.boolean(),

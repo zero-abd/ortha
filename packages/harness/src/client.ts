@@ -2,6 +2,7 @@ import {
   asRequestId,
   ErrorCode,
   OrthaError,
+  DetailsResponseSchema,
   RunResponseSchema,
   SearchResponseSchema,
   type Cents,
@@ -11,7 +12,6 @@ import {
   type RunInput,
   type RunResult,
   type SearchInput,
-  type SideEffectClass,
   type ToolApi,
   type ToolDetails,
 } from "@ortha/contracts";
@@ -102,6 +102,8 @@ export function createOrthogonalClient(deps: OrthogonalClientDeps): OrthogonalCl
   function indexPrices(apis: readonly ToolApi[]): void {
     for (const api of apis) {
       for (const ep of api.endpoints) {
+        // Live search results no longer include a price; only index when present.
+        if (ep.price === undefined) continue;
         const cents = priceToCents(ep.price);
         if (cents !== null) priceIndex.set(priceKey(api.slug, ep.path), cents);
       }
@@ -117,22 +119,27 @@ export function createOrthogonalClient(deps: OrthogonalClientDeps): OrthogonalCl
     },
 
     async getDetails(api: string, path: string): Promise<ToolDetails> {
-      const raw = (await post("/details", { api, path })) as Record<string, unknown>;
-      const priceStr = typeof raw["price"] === "string" ? (raw["price"] as string) : null;
-      const cents = priceStr ? priceToCents(priceStr) : priceIndex.get(priceKey(api, path)) ?? 0;
-      if (priceStr) {
-        const c = priceToCents(priceStr);
-        if (c !== null) priceIndex.set(priceKey(api, path), c);
-      }
+      // Real shape: the endpoint spec is nested under `endpoint`, `price` is a
+      // numeric dollar amount, and params are split across query/body/path.
+      const parsed = DetailsResponseSchema.parse(await post("/details", { api, path }));
+      const ep = parsed.endpoint;
+      // Price comes as dollars (e.g. 0.03). Prefer it; fall back to any indexed price.
+      const cents = ep.price !== undefined ? Math.round(ep.price * 100) : priceIndex.get(priceKey(api, path)) ?? 0;
+      // Index it so estimateCost can price this endpoint after a details lookup.
+      if (ep.price !== undefined) priceIndex.set(priceKey(api, path), cents);
+      const inputSchema = ep.bodyParams?.length || ep.queryParams?.length || ep.pathParams?.length
+        ? { query: ep.queryParams ?? [], body: ep.bodyParams ?? [], path: ep.pathParams ?? [] }
+        : null;
       return {
         api,
         path,
-        method: typeof raw["method"] === "string" ? (raw["method"] as string) : "POST",
-        inputSchema: raw["inputSchema"] ?? raw["parameters"] ?? null,
-        outputSchema: raw["outputSchema"] ?? raw["responseSchema"] ?? null,
-        priceCents: cents ?? 0,
-        verified: raw["verified"] === true,
-        sideEffect: normalizeSideEffect(raw["sideEffect"] ?? raw["method"]),
+        method: ep.method,
+        inputSchema,
+        outputSchema: null,
+        priceCents: cents,
+        verified: parsed.api?.verified === true,
+        // GET is a read; anything else may mutate — treat as write so the gate is cautious.
+        sideEffect: ep.method.toUpperCase() === "GET" ? "read" : "write",
       };
     },
 
@@ -217,12 +224,6 @@ function priceToCents(price: string): Cents | null {
   const dollars = Number.parseFloat(price);
   if (Number.isNaN(dollars)) return null;
   return Math.round(dollars * 100);
-}
-
-function normalizeSideEffect(v: unknown): SideEffectClass {
-  if (v === "read" || v === "write") return v;
-  if (typeof v === "string" && v.toUpperCase() === "GET") return "read";
-  return "unknown";
 }
 
 const backoffMs = (attempt: number): number => Math.min(2_000, 250 * 2 ** attempt);
