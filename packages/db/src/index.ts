@@ -13,6 +13,7 @@ export {
   d1Adapter,
   type SqlDb,
   type SqlParam,
+  type SqlBindable,
   type SqlRow,
   type AsyncSqlDb,
   type BetterSqliteDatabase,

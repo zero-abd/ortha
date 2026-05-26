@@ -14,8 +14,14 @@
       "name": "@ortha/edge",
       "version": "0.0.0",
       "dependencies": {
+        "@ortha/agent": "workspace:*",
+        "@ortha/auth": "workspace:*",
+        "@ortha/budget": "workspace:*",
+        "@ortha/context": "workspace:*",
         "@ortha/contracts": "workspace:*",
+        "@ortha/db": "workspace:*",
         "@ortha/harness": "workspace:*",
+        "@ortha/llm": "workspace:*",
       },
       "devDependencies": {
         "@cloudflare/workers-types": "^4.20250101.0",
