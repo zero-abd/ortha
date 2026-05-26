@@ -48,6 +48,12 @@ export interface AgentDeps {
   readonly requestPermission: (event: Extract<TraceEvent, { type: "permission_required" }>) => Promise<PermissionResponse>;
   /** Durable checkpoint, called after each step. */
   readonly checkpoint: (state: AgentState) => Promise<void>;
+  /**
+   * Called as each assistant/tool message is appended to the transcript, so the
+   * transport can persist the full turn (including tool calls + results with their
+   * requestIds) — this is what lets a later turn `expand_result` a prior call.
+   */
+  readonly onMessage?: (message: LLMMessage) => Promise<void> | void;
   /** Hard ceiling on output tokens per LLM turn. Defaults to 1024. */
   readonly maxTokens?: number;
   /** Max tool-using iterations before forcing a stop. Defaults to 8. */
@@ -116,11 +122,13 @@ export async function* runAgentTurn(deps: AgentDeps, input: AgentInput): AsyncIt
       // tool_calls orphans the following tool result and every provider rejects it.
       if (assistantText.length > 0 || pending.length > 0) {
         const toolCalls = pending.map((p) => ({ id: p.id, name: p.name, args: p.args }));
-        messages.push({
+        const assistantMsg: LLMMessage = {
           role: "assistant",
           content: assistantText,
           ...(toolCalls.length > 0 ? { toolCalls } : {}),
-        });
+        };
+        messages.push(assistantMsg);
+        await deps.onMessage?.(assistantMsg);
       }
 
       // ── 2. No tool calls → the model answered. We're done. ──
@@ -139,7 +147,9 @@ export async function* runAgentTurn(deps: AgentDeps, input: AgentInput): AsyncIt
           return;
         }
         sessionCents = result.sessionCents;
-        messages.push(toolMessage(call.id, call.name, result.toolContent));
+        const toolMsg = toolMessage(call.id, call.name, result.toolContent);
+        messages.push(toolMsg);
+        await deps.onMessage?.(toolMsg);
       }
 
       await checkpoint(deps, messages, stepCounter, sessionCents);

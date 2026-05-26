@@ -21,6 +21,11 @@ export interface NewMessage {
   readonly role: MessageRole;
   readonly content: string;
   readonly toolCallIds?: readonly ToolCallId[];
+  /** role==="assistant": full tool calls requested this turn (faithful replay + cross-turn expand). */
+  readonly toolCalls?: readonly { readonly id: string; readonly name: string; readonly args: Record<string, unknown> }[];
+  /** role==="tool": the call this answers + the tool's name. */
+  readonly toolCallId?: string;
+  readonly toolName?: string;
 }
 
 export interface NewToolCall {

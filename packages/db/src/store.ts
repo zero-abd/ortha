@@ -67,8 +67,33 @@ function rowToConversation(r: SqlRow): Conversation {
   };
 }
 
+interface ToolMeta {
+  toolCalls?: readonly { readonly id: string; readonly name: string; readonly args: Record<string, unknown> }[];
+  toolCallId?: string;
+  toolName?: string;
+}
+
+function parseToolMeta(v: SqlParam | undefined): ToolMeta {
+  if (v == null) return {};
+  try {
+    const o = JSON.parse(String(v));
+    return o && typeof o === "object" && !Array.isArray(o) ? (o as ToolMeta) : {};
+  } catch {
+    return {};
+  }
+}
+
+function toolMetaJson(m: NewMessage): string {
+  const meta: ToolMeta = {};
+  if (m.toolCalls && m.toolCalls.length > 0) meta.toolCalls = m.toolCalls;
+  if (m.toolCallId) meta.toolCallId = m.toolCallId;
+  if (m.toolName) meta.toolName = m.toolName;
+  return JSON.stringify(meta);
+}
+
 function rowToMessage(r: SqlRow): Message {
   const ids = JSON.parse(String(r.toolCallIds)) as string[];
+  const meta = parseToolMeta(r.toolMeta);
   return {
     id: String(r.id) as Message["id"],
     conversationId: String(r.conversationId) as Message["conversationId"],
@@ -76,6 +101,9 @@ function rowToMessage(r: SqlRow): Message {
     content: String(r.content),
     createdAt: num(r.createdAt),
     toolCallIds: ids as unknown as readonly ToolCallId[],
+    ...(meta.toolCalls ? { toolCalls: meta.toolCalls } : {}),
+    ...(meta.toolCallId ? { toolCallId: meta.toolCallId } : {}),
+    ...(meta.toolName ? { toolName: meta.toolName } : {}),
   };
 }
 
@@ -149,8 +177,8 @@ export function createStore(db: SqlDb): ConversationStore {
       );
       const seq = seqRow ? num(seqRow.next) : 1;
       db.run(
-        `INSERT INTO messages (id, conversationId, role, content, createdAt, seq, toolCallIds)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO messages (id, conversationId, role, content, createdAt, seq, toolCallIds, toolMeta)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           message.conversationId,
@@ -159,6 +187,7 @@ export function createStore(db: SqlDb): ConversationStore {
           now,
           seq,
           JSON.stringify(toolCallIds),
+          toolMetaJson(message),
         ],
       );
       db.run(`UPDATE conversations SET updatedAt = ? WHERE id = ?`, [now, message.conversationId]);
@@ -169,6 +198,9 @@ export function createStore(db: SqlDb): ConversationStore {
         content: message.content,
         createdAt: now,
         toolCallIds,
+        ...(message.toolCalls ? { toolCalls: message.toolCalls } : {}),
+        ...(message.toolCallId ? { toolCallId: message.toolCallId } : {}),
+        ...(message.toolName ? { toolName: message.toolName } : {}),
       };
     },
 
