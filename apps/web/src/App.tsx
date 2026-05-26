@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { PermissionResponse, TraceEvent } from "@ortha/contracts";
 import { ApprovalChip } from "./components/ApprovalChip.tsx";
 import { CostMeter } from "./components/CostMeter.tsx";
+import { DiscoverModal } from "./components/DiscoverModal.tsx";
 import { Dropdown } from "./components/Dropdown.tsx";
 import { Logo, Spinner } from "./components/Logo.tsx";
 import { RightPanel } from "./components/RightPanel.tsx";
@@ -59,6 +60,7 @@ export function App() {
   const [running, setRunning] = useState(false);
   const [draft, setDraft] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [discoverOpen, setDiscoverOpen] = useState(false);
   const rawStore = useRef(new Map<string, unknown>());
   const [activeId, setActiveId] = useState<string>(() => crypto.randomUUID());
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -266,6 +268,14 @@ export function App() {
           <span className="brand__word">Ortha</span>
         </div>
 
+        <button className="discover-btn" onClick={() => setDiscoverOpen(true)}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="7" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+          <span>Discover APIs</span>
+        </button>
+
         <button className="acct-switch">
           <span>◐ Personal Account</span>
           <span className="acct-switch__chev">▾</span>
@@ -368,6 +378,8 @@ export function App() {
       )}
 
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} onSaved={onSettingsSaved} />
+
+      <DiscoverModal open={discoverOpen} onClose={() => setDiscoverOpen(false)} />
     </div>
   );
 }
