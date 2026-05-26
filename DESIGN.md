@@ -5,49 +5,54 @@ Source of truth for Ortha's UI. Every frontend agent builds to this. Locked via
 
 Ortha is an **app console**, not a marketing page. The product's wow is
 *transparency* — the user watches a real agent discover and call real tools — so the
-UI's job is to make that legible without burying the answer. The look is
-**gradient-forward and modern** (Codex-energy): glassy surfaces over a deep canvas with
-a vibrant accent gradient used purposefully on the brand, primary actions, active
-states, and focus.
+UI's job is to make that legible without burying the answer. The look matches
+**Orthogonal's actual product**: clean, professional, calm — a light monochrome
+surface, hairline borders, thin icons, generous whitespace. No gradients, no glass,
+no aurora. (We tried that; it read as AI slop. This is the corrected direction.)
 
----
+### Layout (matches Orthogonal's app)
+- **Left sidebar** (`--sidebar`, 256px): logo + "Ortha" wordmark → account switcher →
+  **`+ New chat`** → **conversations list** ("Recent") → bottom: **session cost**,
+  "Get free credits ↗", and the **account button (avatar + name + ⚙) which opens
+  Settings**. Settings lives bottom-left with the account.
+- **Main** (white): minimal top bar (model picker · theme toggle · live cost meter
+  during a turn). Empty state = centered **"Welcome to Ortha"** + subtitle + large
+  **"Ask Ortha"** input + **categorized example cards** (Recruiting, Enrichment) that
+  showcase Orthogonal's catalog. In-conversation = message stream + inline agent-trace
+  + bottom Ask box.
 
 ## 1. Aesthetic
 
-Gradient-forward, **dark-first** (the hero) with a fully-supported light theme. Glassy
-translucent surfaces (`backdrop-filter` blur) over a deep canvas with a soft aurora
-glow. Theme follows system by default with a manual toggle, persisted per user.
-
-The accent is a **gradient**, not a flat color — `--grad: linear-gradient(135deg,
-#22D3EE, #6366F1, #D946EF)` (cyan → indigo → fuchsia). Use it on: the logo tile, the
-gradient wordmark, primary/`--accent` buttons, the composer send button, the cost-meter
-fill, the active trace-step icon, focus rings, and the empty-state hero text. Keep
-surfaces calm so the gradient pops; never wash whole panels in it.
+Clean, **light-first** (the hero) with a fully-supported dark toggle. Calm monochrome:
+white canvas, near-black ink + primary, neutral grays, hairline borders. Theme follows
+system by default, manual toggle persisted per user. The only saturated color is a
+sparing `--accent` (indigo) for the active conversation, links, and the running
+trace/spinner — everything else is neutral.
 
 ### Color tokens
 
-CSS variables; never hardcode hex in components. `:root` holds the dark (default) set;
-`:root[data-theme="light"]` overrides.
+CSS variables; never hardcode hex. `:root` is light (default); `:root[data-theme="dark"]`
+overrides.
 
-| Token | Dark (default) | Light |
+| Token | Light (default) | Dark |
 |---|---|---|
-| `--bg` (canvas) | `#07070C` | `#F5F6FB` |
-| `--surface` (glass) | `rgba(20,20,30,.72)` | `rgba(255,255,255,.74)` |
-| `--elevated` (modal/panel) | `rgba(24,24,36,.94)` | `rgba(255,255,255,.96)` |
-| `--ink` | `#ECEDF5` | `#14141D` |
-| `--muted` | `#9A9AAC` | `#5B5B6B` |
-| `--hairline` | `rgba(255,255,255,.09)` | `rgba(20,20,45,.09)` |
-| `--accent` (solid fallback) | `#8B5CF6` | `#8B5CF6` |
-| `--grad` | cyan→indigo→fuchsia (above) | same |
-| `--ok` / `--warn` / `--danger` | `#34D399` / `#FBBF24` / `#FB7185` | same |
+| `--bg` (canvas) | `#FFFFFF` | `#0F0F11` |
+| `--sidebar` | `#FBFBFA` | `#131315` |
+| `--surface` / `--raised` | `#FFFFFF` | `#161618` / `#1C1C1F` |
+| `--ink` | `#18181B` | `#F4F4F5` |
+| `--muted` | `#71717A` | `#A1A1AA` |
+| `--hairline` | `#ECECEB` | `#262629` |
+| `--primary` (buttons/send/active) | `#18181B` | `#F4F4F5` |
+| `--accent` (sparing: links/active/spinner) | `#4F46E5` | `#818CF8` |
+| `--ok` / `--warn` / `--danger` | `#16A34A` / `#D97706` / `#DC2626` | brightened |
 
-Plus a soft aurora background (`body::before`) from indigo/fuchsia/cyan radial glows.
 Contrast: all body text ≥ 4.5:1 in **both** themes.
 
 ### Logo
-Code-only inline SVG (`components/Logo.tsx`): a gradient rounded-square tile with a
-white ring crossed by **orthogonal axes** (the "Orthogonal" concept) + a gradient
-wordmark. No image assets.
+Code-only inline SVG (`components/Logo.tsx`): the real Orthogonal mark — **two opposite
+pie slices** (top-right + bottom-left quarter wedges) on a light rounded tile, black
+mark. Solid-ink "Ortha" wordmark (no gradient). The same two-slice geometry, accent-
+colored and rotating, is the loading spinner.
 
 ### Typography
 

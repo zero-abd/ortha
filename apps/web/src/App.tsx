@@ -1,8 +1,8 @@
 import { useCallback, useRef, useState } from "react";
 import type { PermissionResponse, TraceEvent } from "@ortha/contracts";
 import { ApprovalChip } from "./components/ApprovalChip.tsx";
-import { Brand, Spinner } from "./components/Logo.tsx";
 import { CostMeter } from "./components/CostMeter.tsx";
+import { Logo, Spinner } from "./components/Logo.tsx";
 import { RightPanel } from "./components/RightPanel.tsx";
 import { SettingsModal } from "./components/SettingsModal.tsx";
 import { SideEffectModal } from "./components/SideEffectModal.tsx";
@@ -12,11 +12,17 @@ import { runTurn } from "./transport.ts";
 import type { ChatMessage, CostState, RawArtifact, TraceStep } from "./types.ts";
 
 const CAP_CENTS = 40;
-const MODELS = ["gemini-2.0-flash", "claude-sonnet", "gpt-4o", "openrouter/auto"];
-const EXAMPLES = [
-  "Who's the CEO of Stripe, and any recent news?",
-  "Find the work email for a founder at Vercel",
-  "Enrich this company: orthogonal.com",
+const MODELS = ["gemini-2.0-flash", "claude-3-5-sonnet-latest", "gpt-4o-mini", "meta-llama/llama-3.3-70b-instruct:free"];
+
+const EXAMPLE_CATS = [
+  {
+    label: "Recruiting",
+    items: ["Find staff engineers in NYC with Rust experience", "Pull LinkedIn profiles for staff engineers at OpenAI"],
+  },
+  {
+    label: "Enrichment & research",
+    items: ["Who's the CEO of Stripe, and any recent news?", "Find the work email for a founder at Vercel"],
+  },
 ];
 
 type PermEvent = Extract<TraceEvent, { type: "permission_required" }>;
@@ -33,7 +39,7 @@ export function App() {
   const [pending, setPending] = useState<Pending | null>(null);
   const [resolvedPerms, setResolvedPerms] = useState<Record<string, "approved" | "skipped">>({});
   const [panel, setPanel] = useState<RawArtifact | null>(null);
-  const [model, setModel] = useState(MODELS[0]);
+  const [model, setModel] = useState(MODELS[0]!);
   const [running, setRunning] = useState(false);
   const [draft, setDraft] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -49,6 +55,9 @@ export function App() {
     });
   }, []);
 
+  const stepApi = useRef<Record<string, string>>({});
+  const apiForStep = (stepId: string): string => stepApi.current[stepId] ?? "tool";
+
   const onEvent = useCallback(
     (e: TraceEvent) => {
       switch (e.type) {
@@ -62,24 +71,16 @@ export function App() {
           }));
           break;
         case "tool_call_started":
-          patchActive((m) => ({
-            ...m,
-            steps: [...m.steps, { stepId: e.stepId, api: e.api, path: e.path, estCents: e.estCents, status: "running" }],
-          }));
+          patchActive((m) => ({ ...m, steps: [...m.steps, { stepId: e.stepId, api: e.api, path: e.path, estCents: e.estCents, status: "running" }] }));
           break;
         case "tool_result":
           patchActive((m) => ({
             ...m,
             steps: m.steps.map((s) =>
-              s.stepId === e.stepId
-                ? { ...s, status: e.ok ? "success" : "failed", summary: e.summary, priceCents: e.priceCents, latencyMs: e.latencyMs, requestId: e.requestId }
-                : s,
+              s.stepId === e.stepId ? { ...s, status: e.ok ? "success" : "failed", summary: e.summary, priceCents: e.priceCents, latencyMs: e.latencyMs, requestId: e.requestId } : s,
             ),
           }));
-          if (e.ok && e.priceCents > 0) {
-            patchActive((m) => m); // no-op keeps types happy
-            setBreakdown((b) => mergeSpend(b, apiForStep(e.stepId), e.priceCents));
-          }
+          if (e.ok && e.priceCents > 0) setBreakdown((b) => mergeSpend(b, apiForStep(e.stepId), e.priceCents));
           break;
         case "self_heal":
           patchActive((m) => ({
@@ -96,7 +97,6 @@ export function App() {
         case "done":
           patchActive((m) => ({ ...m, streaming: false }));
           break;
-        // permission_required is delivered via requestPermission(); permission_resolved is informational.
         case "permission_resolved":
         case "permission_required":
           break;
@@ -104,12 +104,6 @@ export function App() {
     },
     [patchActive],
   );
-
-  // map stepId → api for spend breakdown (we recorded api on the step)
-  const stepApi = useRef<Record<string, string>>({});
-  function apiForStep(stepId: string): string {
-    return stepApi.current[stepId] ?? "tool";
-  }
 
   const requestPermission = useCallback(
     (e: PermEvent): Promise<PermissionResponse> =>
@@ -132,12 +126,10 @@ export function App() {
       if (!text.trim() || running) return;
       setDraft("");
       stepApi.current = {};
-      const userId = `u_${Date.now()}`;
-      const aiId = `a_${Date.now()}`;
       setMessages((prev) => [
         ...prev,
-        { id: userId, role: "user", content: text, steps: [], streaming: false },
-        { id: aiId, role: "assistant", content: "", steps: [], streaming: true },
+        { id: `u_${Date.now()}`, role: "user", content: text, steps: [], streaming: false },
+        { id: `a_${Date.now()}`, role: "assistant", content: "", steps: [], streaming: true },
       ]);
       setRunning(true);
       try {
@@ -163,51 +155,101 @@ export function App() {
     setPanel({ title: requestId, requestId, data: rawStore.current.get(requestId) ?? { note: "no raw stored" } });
   }, []);
 
+  const newChat = () => {
+    setMessages([]);
+    setBreakdown([]);
+    setCost({ sessionCents: 0, capCents: CAP_CENTS, remainingCents: 100_00 });
+    conversationId.current = crypto.randomUUID();
+  };
+
   const empty = messages.length === 0;
+  const convoTitle = messages.find((m) => m.role === "user")?.content.slice(0, 40);
 
   return (
     <div className="app">
-      <header className="topbar">
-        <Brand />
-        <Select value="Personal" options={["Personal", "Acme Inc"]} onChange={() => {}} ariaLabel="Workspace" />
-        <span className="topbar__spacer" />
-        <CostMeter sessionCents={cost.sessionCents} capCents={cost.capCents} breakdown={breakdown} />
-        <Select value={model ?? MODELS[0]!} options={MODELS} onChange={setModel} ariaLabel="Model" />
-        <button className="iconbtn" onClick={toggle} aria-label="Toggle theme">
-          {applied === "dark" ? "☀" : "☾"}
-        </button>
-        <button className="iconbtn" aria-label="Settings" onClick={() => setSettingsOpen(true)}>⚙</button>
-      </header>
-
-      <div className="body">
-        <nav className="rail rail--open" aria-label="Conversations">
-          <div className="rail__top">
-            <button className="btn-sm btn-sm--accent" onClick={() => setMessages([])}>+ New chat</button>
-          </div>
-          <ul className="rail__list">
-            <li className="rail__item">Stripe research</li>
-            <li className="rail__item">Lead enrichment</li>
-          </ul>
-          <div className="rail__account muted">almahmud.zero@gmail.com</div>
-        </nav>
-
-        <div className="stream-wrap">
-          <div className="stream">
-            <div className="stream__inner">
-              {empty ? (
-                <EmptyState onPick={send} />
-              ) : (
-                messages.map((m) => (
-                  <Message key={m.id} m={m} onOpenRaw={openRaw} pending={pending} resolvedPerms={resolvedPerms} onDecide={(r) => pending?.resolve(r)} cap={cost.capCents} session={cost.sessionCents} />
-                ))
-              )}
-            </div>
-          </div>
-          <Composer value={draft} onChange={setDraft} onSend={() => send(draft)} disabled={running} />
+      <aside className="sidebar">
+        <div className="sidebar__brand">
+          <Logo size={24} />
+          <span className="brand__word">Ortha</span>
         </div>
 
+        <button className="acct-switch">
+          <span>◐ Personal Account</span>
+          <span className="acct-switch__chev">▾</span>
+        </button>
+
+        <button className="new-chat" onClick={newChat}>+ New chat</button>
+
+        <div className="convos">
+          <div className="convos__label">Recent</div>
+          {convoTitle ? (
+            <div className="convo convo--active">{convoTitle}</div>
+          ) : (
+            <div className="convos__empty">Your conversations appear here.</div>
+          )}
+        </div>
+
+        <div className="sidebar__foot">
+          <div className="balance">
+            <span>Session</span>
+            <span className="balance__amt">${(cost.sessionCents / 100).toFixed(2)} / ${(cost.capCents / 100).toFixed(2)}</span>
+          </div>
+          <a className="credits" href="https://orthogonal.com" target="_blank" rel="noreferrer">Get free credits ↗</a>
+          <button className="acct" onClick={() => setSettingsOpen(true)} aria-label="Account and settings">
+            <span className="acct__avatar">A</span>
+            <span className="acct__name">Abdullah Al Mahmud</span>
+            <span className="acct__chev">⚙</span>
+          </button>
+        </div>
+      </aside>
+
+      <main className="main">
+        <header className="main__top">
+          <span className="main__spacer" />
+          {!empty && <CostMeter sessionCents={cost.sessionCents} capCents={cost.capCents} breakdown={breakdown} />}
+          <Select value={model} options={MODELS} onChange={setModel} ariaLabel="Model" />
+          <button className="iconbtn" onClick={toggle} aria-label="Toggle theme">{applied === "dark" ? "☀" : "☾"}</button>
+        </header>
+
+        {empty ? (
+          <div className="stream-wrap">
+            <div className="welcome">
+              <h1 className="welcome__title">Welcome to Ortha</h1>
+              <p className="welcome__sub">Describe what you need — Ortha discovers the right tools and runs them.</p>
+              <div style={{ width: "100%", maxWidth: 720 }}>
+                <AskBox value={draft} onChange={setDraft} onSend={() => send(draft)} disabled={running} autoFocus />
+              </div>
+              <div className="cats">
+                {EXAMPLE_CATS.map((c) => (
+                  <div key={c.label} style={{ marginBottom: 18 }}>
+                    <div className="cat__label">{c.label}</div>
+                    <div className="cat__grid">
+                      {c.items.map((ex) => (
+                        <button key={ex} className="examplecard" onClick={() => send(ex)}>{ex}</button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="stream-wrap">
+            <div className="stream">
+              <div className="stream__inner">
+                {messages.map((m) => (
+                  <Message key={m.id} m={m} onOpenRaw={openRaw} pending={pending} resolvedPerms={resolvedPerms} onDecide={(r) => pending?.resolve(r)} cap={cost.capCents} session={cost.sessionCents} />
+                ))}
+              </div>
+            </div>
+            <div className="composer">
+              <AskBox value={draft} onChange={setDraft} onSend={() => send(draft)} disabled={running} />
+            </div>
+          </div>
+        )}
+
         <RightPanel artifact={panel} onClose={() => setPanel(null)} />
-      </div>
+      </main>
 
       {pending?.event.kind === "side_effect" && (
         <SideEffectModal
@@ -261,7 +303,7 @@ function Message({ m, onOpenRaw, pending, resolvedPerms, onDecide, cap, session 
         {m.streaming && !m.content && m.steps.length === 0 && (
           <div className="thinking">
             <Spinner size={16} />
-            <span className="muted">Thinking…</span>
+            <span>Thinking…</span>
           </div>
         )}
         {m.error && (
@@ -275,43 +317,24 @@ function Message({ m, onOpenRaw, pending, resolvedPerms, onDecide, cap, session 
   );
 }
 
-function EmptyState({ onPick }: { onPick: (text: string) => void }) {
+function AskBox({ value, onChange, onSend, disabled, autoFocus }: { value: string; onChange: (v: string) => void; onSend: () => void; disabled: boolean; autoFocus?: boolean }) {
   return (
-    <div className="empty">
-      <div className="empty__lede">Ask Ortha to find real-world data — it discovers the right tool live.</div>
-      <div className="empty__examples">
-        {EXAMPLES.map((ex) => (
-          <button key={ex} className="example" onClick={() => onPick(ex)}>
-            {ex}
-          </button>
-        ))}
-      </div>
-      <div className="nudge muted">Tip: add a provider key in Settings to use your own credits (BYOK).</div>
-    </div>
-  );
-}
-
-function Composer({ value, onChange, onSend, disabled }: { value: string; onChange: (v: string) => void; onSend: () => void; disabled: boolean }) {
-  return (
-    <div className="composer">
-      <div className="composer__inner">
-        <textarea
-          className="composer__input"
-          value={value}
-          placeholder="Message Ortha…"
-          rows={1}
-          onChange={(e) => onChange(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              onSend();
-            }
-          }}
-        />
-        <button className="composer__send" onClick={onSend} disabled={disabled} aria-label="Send">
-          ↑
-        </button>
-      </div>
+    <div className="ask">
+      <textarea
+        className="ask__input"
+        value={value}
+        placeholder="Ask Ortha…"
+        rows={1}
+        autoFocus={autoFocus}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            onSend();
+          }
+        }}
+      />
+      <button className="ask__send" onClick={onSend} disabled={disabled} aria-label="Send">↑</button>
     </div>
   );
 }
@@ -321,9 +344,7 @@ function Select({ value, options, onChange, ariaLabel }: { value: string; option
     <span className="select model-select">
       <select className="select" aria-label={ariaLabel} value={value} onChange={(e) => onChange(e.target.value)}>
         {options.map((o) => (
-          <option key={o} value={o}>
-            {o}
-          </option>
+          <option key={o} value={o}>{o}</option>
         ))}
       </select>
       <span className="select__caret caret">▾</span>
