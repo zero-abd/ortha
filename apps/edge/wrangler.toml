@@ -1,0 +1,32 @@
+# Ortha edge Worker. One Durable Object type: ConversationDO (SQLite-backed).
+# Lane C swaps the stub DO for the Cloudflare Agents SDK base class + orchestration loop.
+name = "ortha-edge"
+main = "src/index.ts"
+compatibility_date = "2026-05-01"
+compatibility_flags = ["nodejs_compat"]
+
+# --- Conversation Durable Object (one instance per conversation) ---
+[[durable_objects.bindings]]
+name = "CONVERSATION_DO"
+class_name = "ConversationDO"
+
+# SQLite-backed DO storage (required for the per-step checkpoint + agents state).
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ConversationDO"]
+
+# --- D1: relational mirror / cross-conversation index ---
+# Fill database_id after: wrangler d1 create ortha
+[[d1_databases]]
+binding = "DB"
+database_name = "ortha"
+database_id = "fdc2bbba-c94a-4eb9-8fd7-64d9a750052d"
+
+# --- KV: sessions, dedupe/result cache, price index, breaker state ---
+# Fill id after: wrangler kv namespace create ortha-kv
+[[kv_namespaces]]
+binding = "KV"
+id = "363a7af242d44c70957af6b11a5bdd56"
+
+# Secrets (set via `wrangler secret put`, NOT here):
+#   KEY_ENCRYPTION_KEY  — master key that encrypts per-workspace BYOK keys at rest

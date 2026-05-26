@@ -1,5 +1,4 @@
 # Dependencies
-packages/
 node_modules/
 .pnp
 .pnp.js
@@ -38,6 +37,12 @@ lerna-debug.log*
 .eslintcache
 .parcel-cache/
 *.tsbuildinfo
+
+# Stray compiled TS artifacts (authored code is .ts only)
+**/test/**/*.js
+**/test/**/*.js.map
+**/test/**/*.d.ts
+**/test/**/*.d.ts.map
 
 # OS files
 .DS_Store
