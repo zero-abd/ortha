@@ -29,7 +29,9 @@ const HISTORY_BUDGET_TOKENS = 8_000;
 export class ConversationDO implements DurableObject {
   private readonly db: SqlDb;
   private readonly store: ConversationStore;
-  private readonly conversationId: ConversationId;
+  // Keyed by the NAME the client addresses (the URL path segment), set in fetch(),
+  // so a conversation can be re-opened via idFromName(name). ctx.id is the fallback.
+  private conversationId: ConversationId;
   private initialized = false;
   private running = false;
   private workspaceId: WorkspaceId = DEMO_WS;
@@ -45,8 +47,13 @@ export class ConversationDO implements DurableObject {
   }
 
   async fetch(request: Request): Promise<Response> {
-    const wsParam = new URL(request.url).searchParams.get("ws");
+    const url = new URL(request.url);
+    const wsParam = url.searchParams.get("ws");
     if (wsParam && /^[a-zA-Z0-9_-]{6,64}$/.test(wsParam)) this.workspaceId = asWorkspaceId(wsParam);
+    // The client addresses this DO via idFromName(<path-name>); key storage + the KV
+    // index by that same name so the conversation is re-openable. Falls back to ctx.id.
+    const nameMatch = url.pathname.match(/\/conversations\/([^/]+)\//);
+    if (nameMatch?.[1]) this.conversationId = asConversationId(decodeURIComponent(nameMatch[1]));
     if (request.headers.get("Upgrade") !== "websocket") {
       return Response.json({ ok: true, durableObject: "ConversationDO", id: this.ctx.id.toString() });
     }
@@ -100,9 +107,33 @@ export class ConversationDO implements DurableObject {
     }
   }
 
+  /** Upsert this conversation into the per-workspace index (KV) so the sidebar can list it. */
+  private async registerConversation(title: string): Promise<void> {
+    const key = `conv-index:${this.workspaceId}`;
+    let list: { id: string; title: string; updatedAt: number }[] = [];
+    try {
+      const raw = await this.env.KV.get(key);
+      if (raw) list = JSON.parse(raw) as typeof list;
+    } catch {
+      /* start fresh */
+    }
+    const id = this.conversationId as string;
+    const existing = list.find((c) => c.id === id);
+    if (existing) {
+      existing.updatedAt = Date.now();
+      if (!existing.title) existing.title = title;
+    } else {
+      list.unshift({ id, title, updatedAt: Date.now() });
+    }
+    list.sort((a, b) => b.updatedAt - a.updatedAt);
+    if (list.length > 50) list = list.slice(0, 50);
+    await this.env.KV.put(key, JSON.stringify(list));
+  }
+
   private async runTurn(ws: WebSocket, text: string): Promise<void> {
     await this.init();
     await this.store.appendMessage({ conversationId: this.conversationId, role: "user", content: text });
+    await this.registerConversation(text.slice(0, 60)).catch(() => {});
 
     const history = await this.store.loadWindow(this.conversationId, HISTORY_BUDGET_TOKENS);
     const messages: LLMMessage[] = history.map((m) => ({ role: m.role, content: m.content }));

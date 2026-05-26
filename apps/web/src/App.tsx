@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { PermissionResponse, TraceEvent } from "@ortha/contracts";
 import { ApprovalChip } from "./components/ApprovalChip.tsx";
 import { CostMeter } from "./components/CostMeter.tsx";
@@ -9,6 +9,9 @@ import { SideEffectModal } from "./components/SideEffectModal.tsx";
 import { TraceBlock } from "./components/TraceBlock.tsx";
 import { useTheme } from "./lib/useTheme.ts";
 import { runTurn } from "./transport.ts";
+import { fetchHistory } from "./live.ts";
+import { API } from "./lib/config.ts";
+import { listConversations, type Conversation } from "./lib/api.ts";
 import type { ChatMessage, CostState, RawArtifact, TraceStep } from "./types.ts";
 
 const CAP_CENTS = 40;
@@ -44,7 +47,8 @@ export function App() {
   const [draft, setDraft] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const rawStore = useRef(new Map<string, unknown>());
-  const conversationId = useRef(crypto.randomUUID());
+  const [activeId, setActiveId] = useState<string>(() => crypto.randomUUID());
+  const [conversations, setConversations] = useState<Conversation[]>([]);
 
   const patchActive = useCallback((fn: (m: ChatMessage) => ChatMessage) => {
     setMessages((prev) => {
@@ -57,6 +61,11 @@ export function App() {
 
   const stepApi = useRef<Record<string, string>>({});
   const apiForStep = (stepId: string): string => stepApi.current[stepId] ?? "tool";
+
+  const refreshConversations = useCallback(() => {
+    void listConversations().then(setConversations).catch(() => {});
+  }, []);
+  useEffect(() => refreshConversations(), [refreshConversations]);
 
   const onEvent = useCallback(
     (e: TraceEvent) => {
@@ -142,28 +151,46 @@ export function App() {
           rawStore: rawStore.current,
           startCents: cost.sessionCents,
           capCents: cost.capCents,
-          conversationId: conversationId.current,
+          conversationId: activeId,
         });
       } finally {
         setRunning(false);
+        refreshConversations();
       }
     },
-    [running, onEvent, requestPermission, cost.sessionCents, cost.capCents],
+    [running, onEvent, requestPermission, cost.sessionCents, cost.capCents, activeId, refreshConversations],
   );
 
   const openRaw = useCallback((requestId: string) => {
     setPanel({ title: requestId, requestId, data: rawStore.current.get(requestId) ?? { note: "no raw stored" } });
   }, []);
 
-  const newChat = () => {
+  const resetSession = () => {
     setMessages([]);
     setBreakdown([]);
+    setPending(null);
+    setPanel(null);
     setCost({ sessionCents: 0, capCents: CAP_CENTS, remainingCents: 100_00 });
-    conversationId.current = crypto.randomUUID();
+  };
+
+  const newChat = () => {
+    resetSession();
+    setActiveId(crypto.randomUUID());
+  };
+
+  const selectConversation = async (id: string) => {
+    if (id === activeId || running) return;
+    resetSession();
+    setActiveId(id);
+    const hist = await fetchHistory(id, API);
+    setMessages(
+      hist
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .map((m, i) => ({ id: `h_${i}`, role: m.role as "user" | "assistant", content: m.content, steps: [], streaming: false })),
+    );
   };
 
   const empty = messages.length === 0;
-  const convoTitle = messages.find((m) => m.role === "user")?.content.slice(0, 40);
 
   return (
     <div className="app">
@@ -182,10 +209,19 @@ export function App() {
 
         <div className="convos">
           <div className="convos__label">Recent</div>
-          {convoTitle ? (
-            <div className="convo convo--active">{convoTitle}</div>
-          ) : (
+          {conversations.length === 0 ? (
             <div className="convos__empty">Your conversations appear here.</div>
+          ) : (
+            conversations.map((c) => (
+              <div
+                key={c.id}
+                className={`convo${c.id === activeId ? " convo--active" : ""}`}
+                onClick={() => void selectConversation(c.id)}
+                title={c.title}
+              >
+                {c.title || "Untitled"}
+              </div>
+            ))
           )}
         </div>
 
