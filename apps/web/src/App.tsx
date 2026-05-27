@@ -11,6 +11,8 @@ import { RightPanel } from "./components/RightPanel.tsx";
 import { SettingsModal } from "./components/SettingsModal.tsx";
 import { SideEffectModal } from "./components/SideEffectModal.tsx";
 import { SkillsModal } from "./components/SkillsModal.tsx";
+import { BatchModal } from "./components/BatchModal.tsx";
+import { collectRow, type RowResult } from "./lib/batch.ts";
 import { TraceBlock } from "./components/TraceBlock.tsx";
 import { useTheme } from "./lib/useTheme.ts";
 import { runTurn } from "./transport.ts";
@@ -67,6 +69,7 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [discoverOpen, setDiscoverOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
+  const [batchOpen, setBatchOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const rawStore = useRef(new Map<string, unknown>());
@@ -245,6 +248,26 @@ export function App() {
     [running, onEvent, requestPermission, cost.sessionCents, cost.capCents, activeId, refreshConversations, patchActive],
   );
 
+  // Run one batch row as an isolated turn: a fresh conversation id (so rows run
+  // concurrently without contending), cost gates auto-confirmed and write
+  // (side-effect) gates skipped (a batch runs unattended), events folded into a
+  // single row result. Server-side caps still bound spend.
+  const runBatchRow = useCallback(
+    async (prompt: string): Promise<RowResult> => {
+      const events: TraceEvent[] = [];
+      await runTurn(prompt, {
+        onEvent: (e) => events.push(e),
+        requestPermission: async (e) => ({ stepId: e.stepId, decision: e.kind === "side_effect" ? "skip" : "approve" }),
+        rawStore: new Map<string, unknown>(),
+        startCents: 0,
+        capCents: settings.sessionCapCents,
+        conversationId: crypto.randomUUID(),
+      });
+      return collectRow(events);
+    },
+    [settings.sessionCapCents],
+  );
+
   const openRaw = useCallback((requestId: string) => {
     setPanel({ title: requestId, requestId, data: rawStore.current.get(requestId) ?? { note: "no raw stored" } });
   }, []);
@@ -283,6 +306,7 @@ export function App() {
     changeProvider,
     openSettings: () => setSettingsOpen(true),
     clearChat,
+    openBatch: () => setBatchOpen(true),
   };
   const commandCtx = useRef<CommandContext>({
     send: (t) => ctxImpl.current.send(t),
@@ -291,6 +315,7 @@ export function App() {
     changeProvider: (p) => ctxImpl.current.changeProvider(p),
     openSettings: () => ctxImpl.current.openSettings(),
     clearChat: () => ctxImpl.current.clearChat(),
+    openBatch: () => ctxImpl.current.openBatch(),
   }).current;
 
   // Run a slash/palette command against the stable context.
@@ -388,6 +413,18 @@ export function App() {
             <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
           </svg>
           <span>Skills</span>
+        </button>
+
+        <button className="discover-btn" onClick={() => setBatchOpen(true)}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <line x1="8" y1="6" x2="21" y2="6" />
+            <line x1="8" y1="12" x2="21" y2="12" />
+            <line x1="8" y1="18" x2="21" y2="18" />
+            <line x1="3" y1="6" x2="3.01" y2="6" />
+            <line x1="3" y1="12" x2="3.01" y2="12" />
+            <line x1="3" y1="18" x2="3.01" y2="18" />
+          </svg>
+          <span>Batch run</span>
         </button>
 
         <button className="acct-switch">
@@ -558,6 +595,7 @@ export function App() {
       <DiscoverModal open={discoverOpen} onClose={() => setDiscoverOpen(false)} />
 
       <SkillsModal open={skillsOpen} onClose={() => setSkillsOpen(false)} onRun={(prompt) => void send(prompt)} />
+      <BatchModal open={batchOpen} onClose={() => setBatchOpen(false)} runRow={runBatchRow} />
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} ctx={commandCtx} />
     </div>
   );

@@ -9,9 +9,9 @@ import {
 } from "../src/lib/commands.ts";
 
 function makeCtx(): CommandContext & {
-  calls: { sent: string[]; drafts: string[]; providers: string[]; newChat: number; settings: number; clear: number };
+  calls: { sent: string[]; drafts: string[]; providers: string[]; newChat: number; settings: number; clear: number; batch: number };
 } {
-  const calls = { sent: [] as string[], drafts: [] as string[], providers: [] as string[], newChat: 0, settings: 0, clear: 0 };
+  const calls = { sent: [] as string[], drafts: [] as string[], providers: [] as string[], newChat: 0, settings: 0, clear: 0, batch: 0 };
   return {
     calls,
     send: (t) => calls.sent.push(t),
@@ -26,13 +26,16 @@ function makeCtx(): CommandContext & {
     clearChat: () => {
       calls.clear++;
     },
+    openBatch: () => {
+      calls.batch++;
+    },
   };
 }
 
 describe("command registry", () => {
   it("exposes the expected commands", () => {
     const ids = COMMANDS.map((c) => c.id).sort();
-    expect(ids).toEqual(["clear", "company", "cost", "email", "enrich", "model", "new", "research", "scrape"].sort());
+    expect(ids).toEqual(["batch", "clear", "company", "cost", "email", "enrich", "model", "new", "research", "scrape"].sort());
   });
 
   it("every prompt command has an expander; every action has a runner", () => {
@@ -141,6 +144,12 @@ describe("runCommand — actions", () => {
     const ctx = makeCtx();
     runCommand(get("cost"), "", ctx);
     expect(ctx.calls.settings).toBe(1);
+  });
+
+  it("/batch opens the batch runner", () => {
+    const ctx = makeCtx();
+    expect(runCommand(get("batch"), "", ctx)).toBe("action");
+    expect(ctx.calls.batch).toBe(1);
   });
 
   it("/model <provider> switches provider", () => {
