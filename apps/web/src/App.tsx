@@ -15,7 +15,7 @@ import { fetchHistory } from "./live.ts";
 import { AuthScreen } from "./components/AuthScreen.tsx";
 import { loginGoogle, logout, me, type AuthUser } from "./lib/auth.ts";
 import { API } from "./lib/config.ts";
-import { getSettings, listConversations, putSettings, type ApiSettings, type Conversation } from "./lib/api.ts";
+import { deleteConversation, getSettings, listConversations, putSettings, renameConversation, type ApiSettings, type Conversation } from "./lib/api.ts";
 import { PROVIDERS, defaultModelOf, providerOfModel } from "./lib/providers.ts";
 import type { ChatMessage, CostState, RawArtifact, TraceStep } from "./types.ts";
 
@@ -65,6 +65,9 @@ export function App() {
   const rawStore = useRef(new Map<string, unknown>());
   const [activeId, setActiveId] = useState<string>(() => crypto.randomUUID());
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  // Inline-rename state: the conversation id being edited and its working title.
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
   const [user, setUser] = useState<AuthUser | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
 
@@ -265,6 +268,38 @@ export function App() {
     );
   };
 
+  // Begin inline-editing a conversation title; seed the draft with the current title.
+  const startRename = (c: Conversation) => {
+    setRenamingId(c.id);
+    setRenameDraft(c.title || "");
+  };
+
+  // Persist the edited title, then refresh the list. Empty/unchanged titles just cancel.
+  const commitRename = async () => {
+    const id = renamingId;
+    const title = renameDraft.trim();
+    setRenamingId(null);
+    if (!id || !title) return;
+    const current = conversations.find((c) => c.id === id);
+    if (current && current.title === title) return;
+    try {
+      await renameConversation(id, title);
+    } finally {
+      refreshConversations();
+    }
+  };
+
+  // Delete after a confirm. If the active conversation is removed, fall back to a new chat.
+  const removeConversation = async (id: string) => {
+    if (!window.confirm("Delete this conversation? This cannot be undone.")) return;
+    try {
+      await deleteConversation(id);
+    } finally {
+      if (id === activeId) newChat();
+      refreshConversations();
+    }
+  };
+
   const empty = messages.length === 0;
 
   if (!authChecked) {
@@ -304,16 +339,61 @@ export function App() {
           {conversations.length === 0 ? (
             <div className="convos__empty">Your conversations appear here.</div>
           ) : (
-            conversations.map((c) => (
-              <div
-                key={c.id}
-                className={`convo${c.id === activeId ? " convo--active" : ""}`}
-                onClick={() => void selectConversation(c.id)}
-                title={c.title}
-              >
-                {c.title || "Untitled"}
-              </div>
-            ))
+            conversations.map((c) =>
+              renamingId === c.id ? (
+                <div key={c.id} className={`convo convo--editing${c.id === activeId ? " convo--active" : ""}`}>
+                  <input
+                    className="convo__rename"
+                    value={renameDraft}
+                    autoFocus
+                    onChange={(e) => setRenameDraft(e.target.value)}
+                    onBlur={() => void commitRename()}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        void commitRename();
+                      } else if (e.key === "Escape") {
+                        e.preventDefault();
+                        setRenamingId(null);
+                      }
+                    }}
+                  />
+                </div>
+              ) : (
+                <div
+                  key={c.id}
+                  className={`convo${c.id === activeId ? " convo--active" : ""}`}
+                  onClick={() => void selectConversation(c.id)}
+                  title={c.title}
+                >
+                  <span className="convo__title">{c.title || "Untitled"}</span>
+                  <span className="convo__actions">
+                    <button
+                      className="iconbtn iconbtn--sm"
+                      aria-label="Rename conversation"
+                      title="Rename"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        startRename(c);
+                      }}
+                    >
+                      &#9998;
+                    </button>
+                    <button
+                      className="iconbtn iconbtn--sm"
+                      aria-label="Delete conversation"
+                      title="Delete"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void removeConversation(c.id);
+                      }}
+                    >
+                      &times;
+                    </button>
+                  </span>
+                </div>
+              ),
+            )
           )}
         </div>
 
