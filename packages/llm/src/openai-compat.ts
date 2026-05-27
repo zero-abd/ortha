@@ -131,7 +131,10 @@ export function createOpenAICompatProvider(config: OpenAICompatProviderConfig): 
     let sawUsage = false;
 
     // index -> partial tool call. Tool calls stream in fragments keyed by index.
-    const toolCalls = new Map<number, { id: string; name: string; args: string }>();
+    // `extra` holds opaque provider metadata to echo back on replay — Gemini 3 sends
+    // a per-call `extra_content: { google: { thought_signature } }` that a follow-up
+    // request MUST include or the API rejects it (HTTP 400 "missing a thought_signature").
+    const toolCalls = new Map<number, { id: string; name: string; args: string; extra?: unknown }>();
 
     for await (const chunk of transport(req)) {
       if (input.signal?.aborted) throw abortError();
@@ -164,6 +167,9 @@ export function createOpenAICompatProvider(config: OpenAICompatProviderConfig): 
           const name = stringOr(fn["name"], "");
           if (name) existing.name = name;
           existing.args += stringOr(fn["arguments"], "");
+          // Gemini 3 attaches `extra_content` (the thought_signature) to the tool-call
+          // delta; capture it verbatim so it can be replayed in history.
+          if (raw["extra_content"] !== undefined) existing.extra = raw["extra_content"];
           toolCalls.set(index, existing);
         }
       }
@@ -181,6 +187,7 @@ export function createOpenAICompatProvider(config: OpenAICompatProviderConfig): 
         id: call.id || `call_${index}`,
         name: call.name,
         args: parseArgs(call.args),
+        ...(call.extra !== undefined ? { extra: call.extra } : {}),
       };
     }
 
@@ -216,6 +223,9 @@ function toOpenAIMessages(system: string, messages: readonly LLMMessage[]): unkn
           id: tc.id,
           type: "function",
           function: { name: tc.name, arguments: JSON.stringify(tc.args) },
+          // Echo Gemini 3's thought_signature (captured as `extra` = the original
+          // `extra_content`) back verbatim, or the API 400s on the follow-up request.
+          ...(tc.extra !== undefined ? { extra_content: tc.extra } : {}),
         })),
       });
     } else if (m.role === "user" && m.images && m.images.length > 0) {
