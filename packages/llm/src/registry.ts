@@ -27,6 +27,15 @@ const MODELS: readonly ModelInfo[] = [
     supportsToolUse: true,
     free: true,
   },
+  {
+    id: "gemini-3-pro-preview",
+    provider: "gemini",
+    displayName: "Gemini 3 Pro",
+    inputPerMTokensCents: 200, // ~$2.00 / Mtok (approx; update when GA pricing lands)
+    outputPerMTokensCents: 1200, // ~$12.00 / Mtok
+    supportsToolUse: true,
+    free: false,
+  },
 
   // --- Anthropic (native adapter). ---
   {
