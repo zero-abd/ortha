@@ -1,6 +1,6 @@
 import type { PermissionResponse, TraceEvent } from "@ortha/contracts";
 import { getWorkspaceId } from "./lib/config.ts";
-import type { TurnDeps } from "./mock/transport.ts";
+import type { TurnDeps } from "./types.ts";
 
 export interface LiveDeps extends TurnDeps {
   conversationId: string;

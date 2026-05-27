@@ -13,7 +13,7 @@ import { useTheme } from "./lib/useTheme.ts";
 import { runTurn } from "./transport.ts";
 import { fetchHistory } from "./live.ts";
 import { API } from "./lib/config.ts";
-import { getSettings, listConversations, listKeys, putSettings, type ApiSettings, type Conversation } from "./lib/api.ts";
+import { getSettings, listConversations, putSettings, type ApiSettings, type Conversation } from "./lib/api.ts";
 import { PROVIDERS, defaultModelOf, providerOfModel } from "./lib/providers.ts";
 import type { ChatMessage, CostState, RawArtifact, TraceStep } from "./types.ts";
 
@@ -55,7 +55,6 @@ export function App() {
   const [resolvedPerms, setResolvedPerms] = useState<Record<string, "approved" | "skipped">>({});
   const [panel, setPanel] = useState<RawArtifact | null>(null);
   const [settings, setSettings] = useState<ApiSettings>(DEFAULT_SETTINGS);
-  const [demo, setDemo] = useState(true);
   const model = settings.model;
   const [running, setRunning] = useState(false);
   const [draft, setDraft] = useState("");
@@ -82,51 +81,32 @@ export function App() {
   }, []);
   useEffect(() => refreshConversations(), [refreshConversations]);
 
-  // Live mode requires an active Orthogonal key AND a key for the current
-  // model's provider. Missing either => server silently runs in demo mode.
-  const detectDemo = useCallback(async (modelId: string) => {
-    try {
-      const keys = await listKeys();
-      const has = (provider: string) => keys.some((k) => k.provider === provider && k.status === "active");
-      const provider = providerOfModel(modelId);
-      setDemo(!(has("orthogonal") && has(provider)));
-    } catch {
-      setDemo(true);
-    }
-  }, []);
-
-  // Seed caps/remaining from persisted settings; detect demo mode.
+  // Seed caps/remaining from persisted settings.
   useEffect(() => {
     void (async () => {
       const loaded = (await getSettings()) ?? DEFAULT_SETTINGS;
       setSettings(loaded);
       setCost((c) => ({ ...c, capCents: loaded.sessionCapCents, remainingCents: loaded.monthlyCapCents }));
-      void detectDemo(loaded.model);
     })();
-  }, [detectDemo]);
+  }, []);
 
-  // Persist a new model (provider default) and re-check demo mode for it.
-  const changeProvider = useCallback(
-    (providerId: string) => {
-      const nextModel = defaultModelOf(providerId);
-      setSettings((prev) => {
-        const next = { ...prev, model: nextModel };
-        void putSettings(next).catch(() => {});
-        return next;
-      });
-      void detectDemo(nextModel);
-    },
-    [detectDemo],
-  );
+  // Persist a new model (provider default).
+  const changeProvider = useCallback((providerId: string) => {
+    const nextModel = defaultModelOf(providerId);
+    setSettings((prev) => {
+      const next = { ...prev, model: nextModel };
+      void putSettings(next).catch(() => {});
+      return next;
+    });
+  }, []);
 
-  // Settings modal saved: adopt new values, reseed caps, recheck demo.
+  // Settings modal saved: adopt new values, reseed caps.
   const onSettingsSaved = useCallback(
     (next: ApiSettings) => {
       setSettings(next);
       setCost((c) => ({ ...c, capCents: next.sessionCapCents, remainingCents: costLive ? c.remainingCents : next.monthlyCapCents }));
-      void detectDemo(next.model);
     },
-    [detectDemo, costLive],
+    [costLive],
   );
 
   const onEvent = useCallback(
@@ -160,12 +140,8 @@ export function App() {
           }));
           break;
         case "cost_update":
-          // Demo mode emits mock spend against a mock $100 cap; ignore it so the
-          // cost state (sidebar + meter) stays honest at $0 / the real session cap.
-          if (!demo) {
-            setCost({ sessionCents: e.sessionCents, capCents: e.capCents, remainingCents: e.workspaceRemainingCents });
-            setCostLive(true);
-          }
+          setCost({ sessionCents: e.sessionCents, capCents: e.capCents, remainingCents: e.workspaceRemainingCents });
+          setCostLive(true);
           break;
         case "error":
           patchActive((m) => ({ ...m, error: { code: e.code, message: e.message }, streaming: false }));
@@ -178,7 +154,7 @@ export function App() {
           break;
       }
     },
-    [patchActive, demo],
+    [patchActive],
   );
 
   const requestPermission = useCallback(
@@ -220,12 +196,18 @@ export function App() {
           capCents: cost.capCents,
           conversationId: activeId,
         });
+      } catch (err) {
+        patchActive((m) => ({
+          ...m,
+          error: { code: "PROVIDER_DOWN", message: err instanceof Error ? err.message : "Couldn't reach Ortha. Check your connection and try again." },
+          streaming: false,
+        }));
       } finally {
         setRunning(false);
         refreshConversations();
       }
     },
-    [running, onEvent, requestPermission, cost.sessionCents, cost.capCents, activeId, refreshConversations],
+    [running, onEvent, requestPermission, cost.sessionCents, cost.capCents, activeId, refreshConversations, patchActive],
   );
 
   const openRaw = useCallback((requestId: string) => {
@@ -317,7 +299,7 @@ export function App() {
       <main className="main">
         <header className="main__top">
           <span className="main__spacer" />
-          {!empty && <CostMeter sessionCents={cost.sessionCents} capCents={cost.capCents} breakdown={breakdown} demo={demo} />}
+          {!empty && <CostMeter sessionCents={cost.sessionCents} capCents={cost.capCents} breakdown={breakdown} />}
           <Dropdown
             value={providerOfModel(model)}
             options={PROVIDERS.map((p) => ({ value: p.id, label: p.label }))}

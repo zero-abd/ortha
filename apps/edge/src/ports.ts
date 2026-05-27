@@ -30,8 +30,8 @@ const BASE_URLS: Record<"openai" | "openrouter" | "gemini", string> = {
 
 /**
  * Build LIVE ports from a workspace's BYOK keys. Returns null when the required
- * keys aren't configured (or anything fails), so the DO falls back to demo mode —
- * a deploy can never break, and no spend happens without the user's own keys.
+ * keys aren't configured (or anything fails), so the caller can surface a
+ * "configure your keys" error. No spend ever happens without the user's own keys.
  */
 export async function buildLivePorts(
   env: Env,

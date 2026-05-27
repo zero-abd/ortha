@@ -1,4 +1,15 @@
 // UI view-models derived from the TraceEvent contract stream.
+import type { PermissionResponse, TraceEvent } from "@ortha/contracts";
+
+/** Callbacks a transport drives as it streams one turn from the worker. */
+export interface TurnDeps {
+  onEvent: (e: TraceEvent) => void;
+  requestPermission: (e: Extract<TraceEvent, { type: "permission_required" }>) => Promise<PermissionResponse>;
+  rawStore: Map<string, unknown>;
+  startCents: number;
+  capCents: number;
+}
+
 export type StepStatus = "searching" | "running" | "success" | "failed" | "skipped";
 
 export interface TraceStep {
