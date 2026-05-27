@@ -23,6 +23,7 @@ import { buildLivePorts } from "./ports.js";
 import { createSqlRawStore, RAW_BLOBS_DDL } from "./raw-store.js";
 import { DurableSpendStore, SESSION_SPEND_DDL, WORKSPACE_SPEND_DDL } from "./spend-store.js";
 import { kvSessionStore } from "./auth-stores.js";
+import { generateTitle } from "./titles.js";
 
 const DEMO_WS: WorkspaceId = asWorkspaceId("demo-ws");
 const HISTORY_BUDGET_TOKENS = 8_000;
@@ -131,7 +132,14 @@ export class ConversationDO implements DurableObject {
   }
 
   private async onMessage(ws: WebSocket, ev: MessageEvent): Promise<void> {
-    let msg: { type?: string; text?: string; images?: unknown; deepResearch?: unknown; response?: PermissionResponse };
+    let msg: {
+      type?: string;
+      text?: string;
+      images?: unknown;
+      deepResearch?: unknown;
+      webSearch?: unknown;
+      response?: PermissionResponse;
+    };
     try {
       msg = JSON.parse(typeof ev.data === "string" ? ev.data : "{}");
     } catch {
@@ -155,16 +163,24 @@ export class ConversationDO implements DurableObject {
       ws.send(JSON.stringify({ type: "error", code: "BAD_REQUEST", message: EMPTY_INPUT_MESSAGE }));
       return;
     }
+    // The composer's web-search toggle defaults ON: only an explicit `false` disables
+    // it. Missing/undefined (older clients) stays ON. Mirrors how deepResearch threads.
+    const webSearch = msg.webSearch !== false;
     this.running = true;
     try {
-      await this.runTurn(ws, msg.text, images, msg.deepResearch === true);
+      await this.runTurn(ws, msg.text, images, msg.deepResearch === true, webSearch);
     } finally {
       this.running = false;
     }
   }
 
-  /** Upsert this conversation into the per-workspace index (KV) so the sidebar can list it. */
-  private async registerConversation(title: string): Promise<void> {
+  /**
+   * Upsert this conversation into the per-workspace index (KV) so the sidebar can list
+   * it. The provisional first-prompt title is set once and never clobbered by a later
+   * turn — except when `force` is set, which is how the async LLM-summarized title
+   * (see `generateTitle`) replaces the placeholder once it's ready.
+   */
+  private async registerConversation(title: string, force = false): Promise<void> {
     const key = `conv-index:${this.workspaceId}`;
     let list: { id: string; title: string; updatedAt: number }[] = [];
     try {
@@ -176,8 +192,14 @@ export class ConversationDO implements DurableObject {
     const id = this.conversationId as string;
     const existing = list.find((c) => c.id === id);
     if (existing) {
-      existing.updatedAt = Date.now();
-      if (!existing.title) existing.title = title;
+      // A forced title update (the LLM summary) shouldn't bump the conversation to the
+      // top of the list — it lands shortly after the turn and isn't new activity.
+      if (force) {
+        if (title) existing.title = title;
+      } else {
+        existing.updatedAt = Date.now();
+        if (!existing.title) existing.title = title;
+      }
     } else {
       list.unshift({ id, title, updatedAt: Date.now() });
     }
@@ -218,9 +240,23 @@ export class ConversationDO implements DurableObject {
     return DEFAULT_SETTINGS.monthlyCapCents;
   }
 
-  private async runTurn(ws: WebSocket, text: string, images: readonly string[] = [], deepResearch = false): Promise<void> {
+  private async runTurn(
+    ws: WebSocket,
+    text: string,
+    images: readonly string[] = [],
+    deepResearch = false,
+    webSearch = true,
+  ): Promise<void> {
     await this.init();
+    // First message of a conversation? Decide BEFORE appending this turn's user
+    // message: an empty window means there's no prior history, so this is the prompt
+    // we summarize into the sidebar title. (Checked here so we don't count the message
+    // we're about to append.)
+    const prior = await this.store.loadWindow(this.conversationId, HISTORY_BUDGET_TOKENS);
+    const isFirstMessage = prior.length === 0;
     await this.store.appendMessage({ conversationId: this.conversationId, role: "user", content: text });
+    // Set a provisional truncated title immediately so the chat appears in the sidebar
+    // right away; the LLM-summarized title (below) replaces it shortly after.
     await this.registerConversation(text.slice(0, 60)).catch(() => {});
 
     const history = await this.store.loadWindow(this.conversationId, HISTORY_BUDGET_TOKENS);
@@ -272,6 +308,23 @@ export class ConversationDO implements DurableObject {
       );
       return;
     }
+
+    // On the first message, summarize the prompt into a short sidebar title via a
+    // cheap LLM call. Run it WITHOUT blocking the user's answer: hand it to
+    // `ctx.waitUntil` so the DO stays alive until it finishes, while the streamed
+    // turn below proceeds immediately. The provisional truncated title is already in
+    // the index, so a failure here just leaves that in place (and `generateTitle`
+    // itself falls back to the truncated prompt on error).
+    if (isFirstMessage) {
+      const llm = ports.llm;
+      const model = ports.model;
+      this.ctx.waitUntil(
+        generateTitle(llm, model, text)
+          .then((title) => this.registerConversation(title, true))
+          .catch(() => {}),
+      );
+    }
+
     const deps: AgentDeps = {
       llm: ports.llm,
       orthogonal: ports.orthogonal,
@@ -284,6 +337,12 @@ export class ConversationDO implements DurableObject {
       // Deep-research mode (from the composer toggle) raises the per-turn web_search
       // budget in the loop (4 → 8) so a multi-source research turn isn't starved.
       deepResearch,
+      // Web-search toggle (composer, default ON). Threaded from the user_message so the
+      // loop can suppress general web search when the user turns it off. NOTE: a sibling
+      // change adds `webSearch?: boolean` to AgentDeps in @ortha/agent; in this isolated
+      // worktree that field may not exist yet, so this is set via a post-construction
+      // assignment to avoid an excess-property error on the object literal. Reconciled
+      // at merge once the field lands on the type.
       // The gate event is already streamed to the client by the loop's `yield`
       // (relayed in the for-await below); here we only register the resolver and
       // await the client's reply. Re-sending it would double-render the chip.
@@ -318,6 +377,11 @@ export class ConversationDO implements DurableObject {
         });
       },
     };
+    // Thread the composer's web-search toggle through. Assigned after construction (not
+    // in the literal) because `webSearch?: boolean` is a sibling addition to AgentDeps
+    // that may not be on the type in this worktree; the cast lets it compile either way
+    // and the loop reads the field once the sibling change lands.
+    (deps as AgentDeps & { webSearch?: boolean }).webSearch = webSearch;
 
     // Verbatim system-prompt echo guard (defense-in-depth vs. prompt-injection leaks).
     // Primary defense is the model's own confidentiality rule (in the system prompt);
