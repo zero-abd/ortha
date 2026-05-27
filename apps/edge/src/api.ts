@@ -256,13 +256,21 @@ export async function handleApi(request: Request, env: Env, url: URL, session: S
       await env.KV.put(skillsKey, JSON.stringify(next));
       return json({ skills: next });
     }
-    // Add a single skill to the list.
+    // Add a single skill to the list — UPSERT by name so re-installing a skill
+    // (e.g. the same public skill) replaces its entry instead of piling up duplicates
+    // in the list and the `/` command picker.
     if (request.method === "POST" && !id) {
       const v = validateSkillInput(await request.json().catch(() => null));
       if ("error" in v) return json({ error: v.error }, 400);
       const list = await readSkills(env, session.workspaceId);
-      const skill: Skill = { id: crypto.randomUUID(), name: v.name, template: v.template, createdAt: Date.now() };
-      const next = [...list, skill];
+      const existing = list.find((s) => s.name === v.name);
+      const skill: Skill = {
+        id: existing?.id ?? crypto.randomUUID(),
+        name: v.name,
+        template: v.template,
+        createdAt: existing?.createdAt ?? Date.now(),
+      };
+      const next = existing ? list.map((s) => (s.name === v.name ? skill : s)) : [...list, skill];
       await env.KV.put(skillsKey, JSON.stringify(next));
       return json({ skills: next });
     }
