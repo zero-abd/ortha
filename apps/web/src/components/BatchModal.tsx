@@ -54,6 +54,9 @@ export function BatchModal({ open, onClose, runRow }: Props) {
   const [running, setRunning] = useState(false);
   const [copied, setCopied] = useState(false);
 
+  // Reset to a clean pick-screen only when the modal opens. This must NOT depend
+  // on `running` — otherwise starting a run (which flips `running` to true) would
+  // re-fire this effect and wipe the skill/rows/running state mid-batch.
   useEffect(() => {
     if (!open) return;
     setSkill(null);
@@ -61,6 +64,12 @@ export function BatchModal({ open, onClose, runRow }: Props) {
     setRuns([]);
     setRunning(false);
     void listSkills().then(setSkills);
+  }, [open]);
+
+  // Escape-to-close, guarded so it can't close mid-run. Kept separate so it can
+  // depend on `running` without resetting any state.
+  useEffect(() => {
+    if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !running) onClose();
     };
