@@ -42,14 +42,16 @@ const DEFAULT_SETTINGS: ApiSettings = {
   cacheTtlSeconds: 300,
 };
 
-// Claude-style first-run greetings; one is picked at random per load.
+// First-run greetings (Ortha is about finding/enriching/looking things up); one is
+// picked at random per load. Kept original — not a riff on any other assistant's line.
 const GREETINGS = [
-  "Coffee and Ortha time?",
-  "What are we building today?",
-  "Ready when you are.",
-  "Let's find something.",
-  "Back at it?",
+  "Who are we looking up today?",
   "What can I dig up for you?",
+  "Point me at a name, domain, or question.",
+  "What do you need found?",
+  "Let's track something down.",
+  "Ready to dig in?",
+  "What's the lead?",
 ];
 
 // Expandable example categories: clicking a chip reveals that category's prompts.
