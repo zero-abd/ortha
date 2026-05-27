@@ -1,9 +1,10 @@
 # Ortha
 
-A web-based AI chat app where the assistant has real, runtime access to **Orthogonal's API catalog** — company data, contacts, lead/people search, enrichment, social, funding, news — plus general web search and scraping. You have a normal conversation; Ortha discovers the right API at runtime, calls it, and answers with real data.
+## ▶ Live app — https://ortha-web.pages.dev
 
-- **Live app:** https://ortha-web.pages.dev
-- **API (Cloudflare Worker):** https://ortha-edge.almahmud-zero.workers.dev
+API (Cloudflare Worker): https://ortha-edge.almahmud-zero.workers.dev
+
+A web-based AI chat app where the assistant has real, runtime access to **Orthogonal's API catalog** — company data, contacts, lead/people search, enrichment, social, funding, news — plus general web search and scraping. You have a normal conversation; Ortha discovers the right API at runtime, calls it, and answers with real data.
 
 > Bring-your-own-key: add a model key (Gemini/Anthropic/OpenAI/OpenRouter) and an Orthogonal key in **Settings**. Keys are encrypted and stored **per device** (never synced); chats and settings sync across your devices.
 
