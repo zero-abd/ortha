@@ -433,11 +433,13 @@ export function App() {
     openSettings: () => setSettingsOpen(true),
     clearChat,
     openBatch: () => setBatchOpen(true),
-    // `/skill` commands: run a no-field skill straight away; for one with fields,
-    // open its run form so the user fills them in first.
-    runSkill: (skill) => {
+    // `/skill` commands: run a no-field skill straight away (appending any text typed
+    // after the trigger as the skill's specific input); for one with fields, open its
+    // run form so the user fills them in first.
+    runSkill: (skill, arg) => {
       if (extractVars(skill.template).length === 0) {
-        send(skill.template);
+        const input = (arg ?? "").trim();
+        send(input ? `${skill.template}\n\n${input}` : skill.template);
       } else {
         setRunSkillTarget(userSkills.find((s) => s.name === skill.name) ?? null);
         setSkillsOpen(true);
@@ -452,7 +454,7 @@ export function App() {
     openSettings: () => ctxImpl.current.openSettings(),
     clearChat: () => ctxImpl.current.clearChat(),
     openBatch: () => ctxImpl.current.openBatch(),
-    runSkill: (s) => ctxImpl.current.runSkill(s),
+    runSkill: (s, arg) => ctxImpl.current.runSkill(s, arg),
   }).current;
 
   // Load saved skills and expose them as `/` slash commands; rebuild on change.

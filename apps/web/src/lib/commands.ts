@@ -29,8 +29,10 @@ export interface CommandContext {
   clearChat: () => void;
   /** Open the batch runner (run a skill across many rows). */
   openBatch: () => void;
-  /** Run a saved skill: send it directly if it has no fields, else open its run form. */
-  runSkill: (skill: { name: string; template: string }) => void;
+  /** Run a saved skill: send it directly if it has no fields, else open its run form.
+   *  `arg` is any text typed after the slash trigger (e.g. `/find-leads CTOs in SF`),
+   *  appended as the skill's specific input. */
+  runSkill: (skill: { name: string; template: string }, arg?: string) => void;
 }
 
 export type CommandKind = "prompt" | "action";
@@ -197,7 +199,8 @@ export function skillCommand(skill: { name: string; template: string }): Command
     title: `/${skillSlug(skill.name)}`,
     description: skill.name,
     kind: "action",
-    run: (ctx) => ctx.runSkill(skill),
+    argHint: "<optional input>",
+    run: (ctx, arg) => ctx.runSkill(skill, arg),
   };
 }
 
