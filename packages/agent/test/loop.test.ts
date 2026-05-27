@@ -381,7 +381,7 @@ describe("runAgentTurn — permission gate", () => {
 });
 
 describe("runAgentTurn — provider error", () => {
-  it("surfaces an OrthaError as an error event with provider slug", async () => {
+  it("feeds a failed tool call back to the model instead of aborting the turn", async () => {
     const orthogonal = makeMockOrthogonalClient({
       async run() {
         throw new OrthaError(ErrorCode.PROVIDER_DOWN, "apollo is down", {
@@ -390,15 +390,25 @@ describe("runAgentTurn — provider error", () => {
         });
       },
     });
-    const llm = makeTurnScriptedLLM([[RUN_CALL, { type: "done", stopReason: "tool_use" }]]);
+    const llm = makeTurnScriptedLLM([
+      [RUN_CALL, { type: "done", stopReason: "tool_use" }],
+      // After the failed call is fed back, the model recovers with an answer.
+      [{ type: "token", text: "Sorry, I couldn't reach that source." }, { type: "done", stopReason: "end" }],
+    ]);
     const events = await collect(baseDeps({ llm, orthogonal }));
-
-    // A retryable provider failure emits a self_heal stub before the error.
     const types = events.map((e) => e.type);
+
+    // A retryable failure still emits a self_heal stub.
     expect(types).toContain("self_heal");
-    const err = events.find((e) => e.type === "error");
-    expect(err).toMatchObject({ code: ErrorCode.PROVIDER_DOWN, providerSlug: "apollo" });
-    expect(types.indexOf("self_heal")).toBeLessThan(types.indexOf("error"));
+    // The failure surfaces as a failed tool_result (not a turn-ending error event)...
+    const failed = events.find((e) => e.type === "tool_result" && (e as { ok: boolean }).ok === false);
+    expect(failed).toBeTruthy();
+    expect((failed as { summary: string }).summary).toContain("PROVIDER_DOWN");
+    expect(types).not.toContain("error");
+    // ...and the turn continues to a real answer rather than aborting empty.
+    const tokens = events.filter((e) => e.type === "token").map((e) => (e as { text: string }).text).join("");
+    expect(tokens).toContain("couldn't reach");
+    expect(events.at(-1)).toEqual({ type: "done", stopReason: "end" });
   });
 });
 

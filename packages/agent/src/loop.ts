@@ -409,12 +409,31 @@ async function* dispatchRun(
   } catch (err) {
     // The call failed: release the hold so we never leak the reservation.
     await deps.budget.refund(reservation).catch(() => undefined);
+    const latencyMs = Date.now() - startedAt;
     if (isOrthaError(err) && err.retryable) {
       // Stub self-heal signal: a richer planner would route to an alternate provider here.
       yield { type: "self_heal", failedProvider: api, altProvider: api };
     }
-    yield* emitError(err);
-    return { kind: "cancelled" };
+    // A single failed tool call must NOT abort the whole turn. Surface it as a
+    // failed step in the trace and feed the error back to the model so it can try
+    // a different tool or answer with what it already has — instead of ending with
+    // an empty/incomplete reply (issue #16).
+    const code = isOrthaError(err) ? err.code : ErrorCode.TOOL_UNKNOWN_STATE;
+    const message = err instanceof Error ? err.message : String(err);
+    yield {
+      type: "tool_result",
+      stepId: stepLabel,
+      requestId: asRequestId(`failed_${stepLabel}`),
+      summary: `failed — ${code}: ${message}`,
+      priceCents: 0,
+      latencyMs,
+      ok: false,
+    };
+    return {
+      kind: "ok",
+      sessionCents,
+      toolContent: `${api} ${path} failed (${code}: ${message}). Do not retry the same call — try a different tool, or answer with what you already have.`,
+    };
   }
 }
 
