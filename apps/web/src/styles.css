@@ -408,6 +408,14 @@ input:focus, textarea:focus { outline: none; border-color: var(--ink-soft); }
 .errbubble__icon { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: var(--danger); color: #fff; font-weight: 700; font-size: 12px; flex: none; }
 .errbubble__text { flex: 1; }
 .thinking { display: flex; align-items: center; gap: 9px; padding: 4px 0; font-size: 14px; color: var(--muted); }
+
+/* Top-level error-boundary fallback (replaces a blank screen on a render crash). */
+.crash { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; text-align: center; background: var(--bg); color: var(--ink); }
+.crash__card { max-width: 420px; }
+.crash__title { font-size: 20px; margin: 0 0 8px; }
+.crash__sub { color: var(--muted); margin: 0 0 16px; font-size: 14px; line-height: 1.5; }
+.crash__actions { display: flex; gap: 8px; justify-content: center; }
+
 .skeleton { position: relative; overflow: hidden; background: var(--hover); border-radius: var(--radius-sm); }
 .skeleton__line { display: block; height: 14px; width: 200px; }
 
