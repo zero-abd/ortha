@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PermissionResponse, TraceEvent } from "@ortha/contracts";
 import { ApprovalChip } from "./components/ApprovalChip.tsx";
+import { CommandPalette } from "./components/CommandPalette.tsx";
 import { CostMeter } from "./components/CostMeter.tsx";
 import { DiscoverModal } from "./components/DiscoverModal.tsx";
 import { Dropdown } from "./components/Dropdown.tsx";
+import { SlashMenu, type SlashNav } from "./components/SlashMenu.tsx";
 import { Logo, Spinner } from "./components/Logo.tsx";
 import { RightPanel } from "./components/RightPanel.tsx";
 import { SettingsModal } from "./components/SettingsModal.tsx";
@@ -17,6 +19,7 @@ import { loginGoogle, logout, me, type AuthUser } from "./lib/auth.ts";
 import { API } from "./lib/config.ts";
 import { deleteConversation, getSettings, listConversations, putSettings, renameConversation, type ApiSettings, type Conversation } from "./lib/api.ts";
 import { PROVIDERS, defaultModelOf, providerOfModel } from "./lib/providers.ts";
+import { runCommand, type Command, type CommandContext } from "./lib/commands.ts";
 import type { ChatMessage, CostState, RawArtifact, TraceStep } from "./types.ts";
 
 const DEFAULT_SETTINGS: ApiSettings = {
@@ -62,6 +65,7 @@ export function App() {
   const [draft, setDraft] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [discoverOpen, setDiscoverOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const rawStore = useRef(new Map<string, unknown>());
   const [activeId, setActiveId] = useState<string>(() => crypto.randomUUID());
@@ -258,6 +262,52 @@ export function App() {
     setSidebarOpen(false);
   };
 
+  // /clear: wipe the current view (messages + spend) but stay in the same
+  // conversation, unlike /new which spins up a fresh conversation id.
+  const clearChat = () => {
+    resetSession();
+    setDraft("");
+  };
+
+  // Context handed to slash commands + the ⌘K palette. We keep a ref to the
+  // latest handlers (some close over fresh state like `settings`) and expose a
+  // single stable object whose methods read through the ref — so the palette /
+  // slash menu never re-subscribe, yet always run the current closures.
+  const ctxImpl = useRef<CommandContext>({} as CommandContext);
+  ctxImpl.current = {
+    send,
+    setDraft,
+    newChat,
+    changeProvider,
+    openSettings: () => setSettingsOpen(true),
+    clearChat,
+  };
+  const commandCtx = useRef<CommandContext>({
+    send: (t) => ctxImpl.current.send(t),
+    setDraft: (t) => ctxImpl.current.setDraft(t),
+    newChat: () => ctxImpl.current.newChat(),
+    changeProvider: (p) => ctxImpl.current.changeProvider(p),
+    openSettings: () => ctxImpl.current.openSettings(),
+    clearChat: () => ctxImpl.current.clearChat(),
+  }).current;
+
+  // Run a slash/palette command against the stable context.
+  const onCommand = useCallback((cmd: Command, arg: string) => {
+    runCommand(cmd, arg, commandCtx);
+  }, [commandCtx]);
+
+  // Global ⌘K / Ctrl+K toggles the command palette.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
+        e.preventDefault();
+        setPaletteOpen((o) => !o);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   const selectConversation = async (id: string) => {
     if (id === activeId || running) return;
     resetSession();
@@ -439,7 +489,7 @@ export function App() {
               <h1 className="welcome__title">Welcome to Ortha</h1>
               <p className="welcome__sub">Describe what you need — Ortha discovers the right tools and runs them.</p>
               <div style={{ width: "100%", maxWidth: 720 }}>
-                <AskBox value={draft} onChange={setDraft} onSend={() => send(draft)} disabled={running} autoFocus />
+                <AskBox value={draft} onChange={setDraft} onSend={() => send(draft)} onCommand={onCommand} disabled={running} autoFocus />
               </div>
               <div className="cats">
                 {EXAMPLE_CATS.map((c) => (
@@ -465,7 +515,7 @@ export function App() {
               </div>
             </div>
             <div className="composer">
-              <AskBox value={draft} onChange={setDraft} onSend={() => send(draft)} disabled={running} />
+              <AskBox value={draft} onChange={setDraft} onSend={() => send(draft)} onCommand={onCommand} disabled={running} />
             </div>
           </div>
         )}
@@ -497,6 +547,8 @@ export function App() {
       />
 
       <DiscoverModal open={discoverOpen} onClose={() => setDiscoverOpen(false)} />
+
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} ctx={commandCtx} />
     </div>
   );
 }
@@ -552,24 +604,82 @@ function Message({ m, onOpenRaw, pending, resolvedPerms, onDecide, cap, session 
   );
 }
 
-function AskBox({ value, onChange, onSend, disabled, autoFocus }: { value: string; onChange: (v: string) => void; onSend: () => void; disabled: boolean; autoFocus?: boolean }) {
+function AskBox({
+  value,
+  onChange,
+  onSend,
+  onCommand,
+  disabled,
+  autoFocus,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  onSend: () => void;
+  onCommand?: (cmd: Command, arg: string) => void;
+  disabled: boolean;
+  autoFocus?: boolean;
+}) {
+  // The slash menu is shown when the draft starts with "/" and isn't yet a
+  // full "command + space + arg" line being typed past the menu. We keep it
+  // open while the user is still on the command word or just past it.
+  const slashOpen = onCommand != null && value.startsWith("/");
+  const navRef = useRef<SlashNav | null>(null);
+
+  const runActive = () => {
+    const nav = navRef.current;
+    if (nav?.hasResults) {
+      nav.run();
+      return true;
+    }
+    return false;
+  };
+
   return (
-    <div className="ask">
-      <textarea
-        className="ask__input"
-        value={value}
-        placeholder="Ask Ortha…"
-        rows={1}
-        autoFocus={autoFocus}
-        onChange={(e) => onChange(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            onSend();
-          }
-        }}
-      />
-      <button className="ask__send" onClick={onSend} disabled={disabled} aria-label="Send">↑</button>
+    <div className="ask-wrap">
+      {slashOpen && (
+        <SlashMenu
+          query={value}
+          registerNav={(nav) => {
+            navRef.current = nav;
+          }}
+          onChoose={(cmd) => onCommand?.(cmd, value.replace(/^\/\S*\s*/, ""))}
+        />
+      )}
+      <div className="ask">
+        <textarea
+          className="ask__input"
+          value={value}
+          placeholder="Ask Ortha… (/ for commands)"
+          rows={1}
+          autoFocus={autoFocus}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => {
+            // While the slash menu is open with matches, the arrow keys and
+            // Enter drive selection instead of the textarea / send.
+            if (slashOpen && navRef.current?.hasResults) {
+              if (e.key === "ArrowDown") {
+                e.preventDefault();
+                navRef.current.move(1);
+                return;
+              }
+              if (e.key === "ArrowUp") {
+                e.preventDefault();
+                navRef.current.move(-1);
+                return;
+              }
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                if (runActive()) return;
+              }
+            }
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              onSend();
+            }
+          }}
+        />
+        <button className="ask__send" onClick={onSend} disabled={disabled} aria-label="Send">↑</button>
+      </div>
     </div>
   );
 }
