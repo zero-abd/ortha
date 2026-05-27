@@ -25,4 +25,11 @@ export interface WebClient {
   search(query: string): Promise<readonly WebSearchResult[]>;
   /** Fetch and read a single URL as clean markdown. */
   scrape(url: string): Promise<WebPage>;
+  /**
+   * Read several URLs concurrently (bounded fan-out). Returns one settled result
+   * per input URL, in input order, so a single failure never sinks the batch.
+   * The agent loop currently scrapes serially; this lets a research turn read
+   * promising results in parallel without N round-trips of latency.
+   */
+  scrapeMany(urls: readonly string[]): Promise<readonly PromiseSettledResult<WebPage>[]>;
 }
