@@ -44,20 +44,18 @@ export function publicSkillPrompt(skill: Pick<PublicSkill, "content" | "descript
 interface Props {
   open: boolean;
   onClose: () => void;
-  /** Called with the filled prompt when a skill is run. Parent wires this to send(). */
-  onRun: (prompt: string) => void;
+  /** Run a skill: sends the prompt to the model. `displayText` is the short label shown
+   *  in the chat bubble (so the long SKILL.md never floods the conversation). */
+  onRun: (prompt: string, displayText?: string) => void;
   /** Fired whenever the saved-skill set changes (create / install / delete) so the
    *  host can refresh its `/` slash commands. */
   onSkillsChanged?: (skills: Skill[]) => void;
-  /** When set on open, jump straight to this skill's run form (used by `/skill`
-   *  commands whose template has fields to fill). */
-  initialRunSkill?: Skill | null;
 }
 
 type Tab = "yours" | "public";
-type View = { mode: "list" } | { mode: "create" } | { mode: "run"; skill: Skill };
+type View = { mode: "list" } | { mode: "create" };
 
-export function SkillsModal({ open, onClose, onRun, onSkillsChanged, initialRunSkill }: Props) {
+export function SkillsModal({ open, onClose, onRun, onSkillsChanged }: Props) {
   const [tab, setTab] = useState<Tab>("yours");
   const [skills, setSkills] = useState<Skill[]>([]);
   const [publicSkills, setPublicSkills] = useState<PublicSkill[] | null>(null);
@@ -74,8 +72,7 @@ export function SkillsModal({ open, onClose, onRun, onSkillsChanged, initialRunS
   useEffect(() => {
     if (!open) return;
     setTab("yours");
-    // Honor a requested run target (from a `/skill` command), else the list.
-    setView(initialRunSkill ? { mode: "run", skill: initialRunSkill } : { mode: "list" });
+    setView({ mode: "list" });
     setName("");
     setTemplate("");
     setError("");
@@ -84,7 +81,7 @@ export function SkillsModal({ open, onClose, onRun, onSkillsChanged, initialRunS
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [open, onClose, initialRunSkill]);
+  }, [open, onClose]);
 
   // Lazily fetch the public catalog the first time the user opens that tab.
   useEffect(() => {
@@ -122,7 +119,7 @@ export function SkillsModal({ open, onClose, onRun, onSkillsChanged, initialRunS
   };
 
   const usePublic = (skill: PublicSkill) => {
-    onRun(publicSkillPrompt(skill));
+    onRun(publicSkillPrompt(skill), `Run skill: ${skill.name}`);
     onClose();
   };
 
@@ -139,8 +136,7 @@ export function SkillsModal({ open, onClose, onRun, onSkillsChanged, initialRunS
     setTimeout(() => setAdded((cur) => (cur === skill.id ? null : cur)), 1800);
   };
 
-  const title =
-    view.mode === "create" ? "New skill" : view.mode === "run" ? `Run · ${view.skill.name}` : "Skills";
+  const title = view.mode === "create" ? "New skill" : "Skills";
   // Names already in "Your skills" — so a public card can show "Added" instead of "Add".
   const installedNames = new Set(skills.map((s) => s.name));
   // Widen the modal on the public tab so its catalog lays out as a multi-column grid
@@ -187,7 +183,7 @@ export function SkillsModal({ open, onClose, onRun, onSkillsChanged, initialRunS
                 setError("");
                 setView({ mode: "create" });
               }}
-              onRun={(s) => setView({ mode: "run", skill: s })}
+              onRun={(s) => { onRun(s.template, `Run skill: ${s.name}`); onClose(); }}
               onDelete={remove}
             />
           )}
@@ -219,7 +215,7 @@ export function SkillsModal({ open, onClose, onRun, onSkillsChanged, initialRunS
                   onChange={(e) => setTemplate(e.target.value)}
                 />
                 <span className="settings__help">
-                  Wrap a word in braces — like <span className="mono">{"{email}"}</span> — to turn it into a field you fill in when you run the skill.
+                  A saved prompt you can run anytime — from here or as a <span className="mono">/command</span>. Ortha runs it and asks for any details it needs.
                 </span>
               </div>
               {error && <span className="skill__error">{error}</span>}
@@ -230,17 +226,6 @@ export function SkillsModal({ open, onClose, onRun, onSkillsChanged, initialRunS
                 </button>
               </div>
             </div>
-          )}
-
-          {view.mode === "run" && (
-            <RunSkill
-              skill={view.skill}
-              onCancel={() => setView({ mode: "list" })}
-              onRun={(prompt) => {
-                onRun(prompt);
-                onClose();
-              }}
-            />
           )}
         </div>
       </div>
@@ -415,39 +400,5 @@ function PublicSkillCard({
   );
 }
 
-function RunSkill({ skill, onCancel, onRun }: { skill: Skill; onCancel: () => void; onRun: (prompt: string) => void }) {
-  const vars = useMemo(() => extractVars(skill.template), [skill.template]);
-  const [values, setValues] = useState<Record<string, string>>({});
-
-  const filled = fillTemplate(skill.template, values);
-  const ready = vars.every((v) => (values[v] ?? "").trim().length > 0);
-
-  return (
-    <div className="settings__section">
-      {vars.length === 0 ? (
-        <span className="settings__help">This skill has no fields — it runs exactly as written.</span>
-      ) : (
-        vars.map((v, i) => (
-          <div className="field" key={v}>
-            <span className="settings__sublabel">{v}</span>
-            <input
-              className="input"
-              placeholder={`Value for ${v}`}
-              value={values[v] ?? ""}
-              autoFocus={i === 0}
-              onChange={(e) => setValues((prev) => ({ ...prev, [v]: e.target.value }))}
-            />
-          </div>
-        ))
-      )}
-      <div className="field">
-        <span className="settings__sublabel">Preview</span>
-        <div className="skill__preview">{filled}</div>
-      </div>
-      <div className="skill__formfoot">
-        <button className="btn-sm" onClick={onCancel}>Back</button>
-        <button className="btn-sm btn-sm--accent" disabled={!ready} onClick={() => onRun(filled)}>Run skill</button>
-      </div>
-    </div>
-  );
-}
+// (Skills run directly now — no per-field form. `extractVars`/`fillTemplate` remain
+// exported for callers/tests that still compose templates.)

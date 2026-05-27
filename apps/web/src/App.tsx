@@ -12,7 +12,7 @@ import { Markdown } from "./components/Markdown.tsx";
 import { RightPanel } from "./components/RightPanel.tsx";
 import { SettingsModal } from "./components/SettingsModal.tsx";
 import { SideEffectModal } from "./components/SideEffectModal.tsx";
-import { SkillsModal, extractVars } from "./components/SkillsModal.tsx";
+import { SkillsModal } from "./components/SkillsModal.tsx";
 import { ConnectorsModal } from "./components/ConnectorsModal.tsx";
 import { BatchModal } from "./components/BatchModal.tsx";
 import { collectRow, type RowResult } from "./lib/batch.ts";
@@ -131,7 +131,6 @@ export function App() {
   const [discoverOpen, setDiscoverOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [userSkills, setUserSkills] = useState<Skill[]>([]);
-  const [runSkillTarget, setRunSkillTarget] = useState<Skill | null>(null);
   const [batchOpen, setBatchOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [agentsOpen, setAgentsOpen] = useState(false);
@@ -299,16 +298,19 @@ export function App() {
   }, []);
 
   const send = useCallback(
-    async (text: string, imageArg?: string[]) => {
+    async (text: string, imageArg?: string[], opts?: { displayText?: string }) => {
       // Images default to whatever is attached in the composer; example cards and
       // commands call send(text) with no images and behave exactly as before.
       const images = imageArg ?? attached;
       const files = attachments;
       // Allow an image- or file-only message (no text), e.g. "what's in this?".
       if ((!text.trim() && images.length === 0 && files.length === 0) || running) return;
-      // The bubble shows the ORIGINAL text (+ image thumbnails / a 📎 file chip). The
-      // model gets file contents prepended, then wrapped with the research directive
-      // when deep-research is on; images ride alongside as vision input.
+      // The bubble shows the ORIGINAL text (+ image thumbnails / a 📎 file chip), or a
+      // short label when one is provided (e.g. "Run skill: find-leads" — so a skill's
+      // long SKILL.md goes to the model but never floods the chat). The model gets file
+      // contents prepended, then wrapped with the research directive when deep-research
+      // is on; images ride alongside as vision input.
+      const displayContent = opts?.displayText ?? text;
       let turnText = files.length > 0 ? buildPromptWithAttachments(text, files) : text;
       if (deepResearch) turnText = wrapResearch(turnText);
       setDraft("");
@@ -320,7 +322,7 @@ export function App() {
         {
           id: `u_${Date.now()}`,
           role: "user",
-          content: text,
+          content: displayContent,
           steps: [],
           streaming: false,
           ...(images.length > 0 ? { images } : {}),
@@ -329,7 +331,7 @@ export function App() {
         { id: `a_${Date.now()}`, role: "assistant", content: "", steps: [], streaming: true },
       ]);
       setRunning(true);
-      const runId = startAgentRun(text || files.map((f) => f.name).join(", "), "chat");
+      const runId = startAgentRun(displayContent || files.map((f) => f.name).join(", "), "chat");
       try {
         await runTurn(turnText, {
           onEvent: (e) => {
@@ -426,17 +428,13 @@ export function App() {
     openSettings: () => setSettingsOpen(true),
     clearChat,
     openBatch: () => setBatchOpen(true),
-    // `/skill` commands: run a no-field skill straight away (appending any text typed
-    // after the trigger as the skill's specific input); for one with fields, open its
-    // run form so the user fills them in first.
+    // `/skill` commands run the skill straight away — no variable form. The full skill
+    // text goes to the model; the chat shows a short "Run skill: …" label. Any text typed
+    // after the trigger rides along as the skill's input (else the agent just asks).
     runSkill: (skill, arg) => {
-      if (extractVars(skill.template).length === 0) {
-        const input = (arg ?? "").trim();
-        send(input ? `${skill.template}\n\n${input}` : skill.template);
-      } else {
-        setRunSkillTarget(userSkills.find((s) => s.name === skill.name) ?? null);
-        setSkillsOpen(true);
-      }
+      const input = (arg ?? "").trim();
+      const prompt = input ? `${skill.template}\n\n${input}` : skill.template;
+      void send(prompt, undefined, { displayText: `Run skill: ${skill.name}${input ? ` — ${input}` : ""}` });
     },
   };
   const commandCtx = useRef<CommandContext>({
@@ -780,10 +778,9 @@ export function App() {
 
       <SkillsModal
         open={skillsOpen}
-        onClose={() => { setSkillsOpen(false); setRunSkillTarget(null); }}
-        onRun={(prompt) => void send(prompt)}
+        onClose={() => setSkillsOpen(false)}
+        onRun={(prompt, displayText) => void send(prompt, undefined, displayText ? { displayText } : undefined)}
         onSkillsChanged={(s) => setUserSkills(s)}
-        initialRunSkill={runSkillTarget}
       />
       <ConnectorsModal open={connectorsOpen} onClose={() => setConnectorsOpen(false)} />
       <BatchModal open={batchOpen} onClose={() => setBatchOpen(false)} runRow={runBatchRow} />
