@@ -45,6 +45,39 @@ describe("openai-compat — tool round-trip serialization", () => {
     expect(tool.tool_call_id).toBe("call_1");
   });
 
+  it("emits an image_url content part for a user message with images (vision)", async () => {
+    let body: { messages: Array<Record<string, unknown>> } | undefined;
+    const dataUrl = "data:image/png;base64,iVBORw0KGgo=";
+    const messages: LLMMessage[] = [
+      { role: "user", content: "what is in this image?", images: [dataUrl, "https://example.com/cat.jpg"] },
+    ];
+    const provider = createOpenAICompatProvider({
+      providerId: "gemini",
+      apiKey: "k",
+      transport: cannedTransport(DONE, (r) => { body = JSON.parse(r.body) as typeof body; }),
+    });
+    await drain(provider.streamCompletion({ model: "gemini-2.5-flash", system: "", messages, tools: [], maxTokens: 256 }));
+
+    const user = body!.messages.find((m) => m.role === "user") as { content: Array<Record<string, unknown>> };
+    expect(Array.isArray(user.content)).toBe(true);
+    expect(user.content[0]).toEqual({ type: "text", text: "what is in this image?" });
+    expect(user.content[1]).toEqual({ type: "image_url", image_url: { url: dataUrl } });
+    expect(user.content[2]).toEqual({ type: "image_url", image_url: { url: "https://example.com/cat.jpg" } });
+  });
+
+  it("keeps user content a plain string when no images are attached (backward compatible)", async () => {
+    let body: { messages: Array<Record<string, unknown>> } | undefined;
+    const messages: LLMMessage[] = [{ role: "user", content: "hello" }];
+    const provider = createOpenAICompatProvider({
+      providerId: "gemini",
+      apiKey: "k",
+      transport: cannedTransport(DONE, (r) => { body = JSON.parse(r.body) as typeof body; }),
+    });
+    await drain(provider.streamCompletion({ model: "gemini-2.5-flash", system: "", messages, tools: [], maxTokens: 256 }));
+    const user = body!.messages.find((m) => m.role === "user") as { content: unknown };
+    expect(user.content).toBe("hello");
+  });
+
   it("recovers the first object when Gemini concatenates two tool-call argument fragments", async () => {
     // Gemini's compat layer sometimes merges two parallel calls' args into one
     // fragment. The parser must recover the first call rather than abort the turn.

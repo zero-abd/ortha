@@ -129,6 +129,41 @@ describe("anthropic adapter — request shaping & quirks", () => {
     expect(captured!.headers["anthropic-version"]).toBeTruthy();
   });
 
+  it("emits image content blocks for a user message with images (vision)", async () => {
+    let captured: TransportRequest | undefined;
+    const dataUrl = "data:image/png;base64,iVBORw0KGgo=";
+    const provider = createAnthropicProvider({
+      apiKey: "sk-test",
+      transport: cannedTransport([{ type: "message_stop" }], (r) => (captured = r)),
+    });
+    await collect(
+      provider.streamCompletion(
+        input({
+          messages: [{ role: "user", content: "describe these", images: [dataUrl, "https://example.com/cat.jpg"] }],
+        }),
+      ),
+    );
+    const body = JSON.parse(captured!.body);
+    expect(body.messages).toHaveLength(1);
+    expect(body.messages[0].role).toBe("user");
+    expect(body.messages[0].content).toEqual([
+      { type: "text", text: "describe these" },
+      { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgo=" } },
+      { type: "image", source: { type: "url", url: "https://example.com/cat.jpg" } },
+    ]);
+  });
+
+  it("keeps user content a plain string when no images are attached (backward compatible)", async () => {
+    let captured: TransportRequest | undefined;
+    const provider = createAnthropicProvider({
+      apiKey: "sk-test",
+      transport: cannedTransport([{ type: "message_stop" }], (r) => (captured = r)),
+    });
+    await collect(provider.streamCompletion(input({ messages: [{ role: "user", content: "hi" }] })));
+    const body = JSON.parse(captured!.body);
+    expect(body.messages[0]).toEqual({ role: "user", content: "hi" });
+  });
+
   it("emits terminal usage+done even when the stream ends without message_stop", async () => {
     const chunks = [
       { type: "message_start", message: { usage: { input_tokens: 4 } } },

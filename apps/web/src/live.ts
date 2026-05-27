@@ -12,7 +12,7 @@ export interface LiveDeps extends TurnDeps {
  * Mirrors the mock's deps so App is transport-agnostic. Rejects fast on connection
  * failure so the caller can fall back to the mock.
  */
-export function runLiveTurn(text: string, deps: LiveDeps, apiBase: string): Promise<void> {
+export function runLiveTurn(text: string, deps: LiveDeps, apiBase: string, images?: readonly string[]): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const wsBase = apiBase.replace(/^http/, "ws");
     const token = encodeURIComponent(getToken() ?? "");
@@ -29,7 +29,7 @@ export function runLiveTurn(text: string, deps: LiveDeps, apiBase: string): Prom
     ws.addEventListener("open", () => {
       opened = true;
       clearTimeout(openTimer);
-      ws.send(JSON.stringify({ type: "user_message", text }));
+      ws.send(JSON.stringify({ type: "user_message", text, ...(images && images.length > 0 ? { images } : {}) }));
     });
 
     ws.addEventListener("message", (e) => {
