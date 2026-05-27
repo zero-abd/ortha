@@ -13,6 +13,7 @@ import { SideEffectModal } from "./components/SideEffectModal.tsx";
 import { SkillsModal } from "./components/SkillsModal.tsx";
 import { BatchModal } from "./components/BatchModal.tsx";
 import { collectRow, type RowResult } from "./lib/batch.ts";
+import { type Attachment, buildPromptWithAttachments, isTextFile } from "./lib/attachments.ts";
 import { TraceBlock } from "./components/TraceBlock.tsx";
 import { useTheme } from "./lib/useTheme.ts";
 import { runTurn } from "./transport.ts";
@@ -68,6 +69,9 @@ export function App() {
   const model = settings.model;
   const [running, setRunning] = useState(false);
   const [draft, setDraft] = useState("");
+  // Text-document attachments for the next message. Their contents ride in the
+  // prompt (see `send`); the chat bubble stays clean (original text + a chip).
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [discoverOpen, setDiscoverOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
@@ -230,18 +234,31 @@ export function App() {
 
   const send = useCallback(
     async (text: string) => {
-      if (!text.trim() || running) return;
+      // Allow sending with attachments even when the text is blank.
+      if ((!text.trim() && attachments.length === 0) || running) return;
+      const files = attachments;
+      // The bubble shows the user's ORIGINAL text + a 📎 chip; the model gets
+      // the file contents prepended (buildPromptWithAttachments).
+      const turnText = buildPromptWithAttachments(text, files);
       setDraft("");
+      setAttachments([]);
       stepApi.current = {};
       setMessages((prev) => [
         ...prev,
-        { id: `u_${Date.now()}`, role: "user", content: text, steps: [], streaming: false },
+        {
+          id: `u_${Date.now()}`,
+          role: "user",
+          content: text,
+          steps: [],
+          streaming: false,
+          ...(files.length > 0 ? { attachmentNames: files.map((f) => f.name) } : {}),
+        },
         { id: `a_${Date.now()}`, role: "assistant", content: "", steps: [], streaming: true },
       ]);
       setRunning(true);
-      const runId = startAgentRun(text, "chat");
+      const runId = startAgentRun(text || files.map((f) => f.name).join(", "), "chat");
       try {
-        await runTurn(text, {
+        await runTurn(turnText, {
           onEvent: (e) => {
             if (e.type === "tool_call_started") stepApi.current[e.stepId] = e.api;
             onEvent(e);
@@ -263,7 +280,7 @@ export function App() {
         refreshConversations();
       }
     },
-    [running, onEvent, requestPermission, cost.sessionCents, cost.capCents, activeId, refreshConversations, patchActive, startAgentRun, pushAgentEvent, finishAgentRun],
+    [running, attachments, onEvent, requestPermission, cost.sessionCents, cost.capCents, activeId, refreshConversations, patchActive, startAgentRun, pushAgentEvent, finishAgentRun],
   );
 
   // Run one batch row as an isolated turn: a fresh conversation id (so rows run
@@ -580,7 +597,7 @@ export function App() {
               <h1 className="welcome__title">Welcome to Ortha</h1>
               <p className="welcome__sub">Describe what you need — Ortha discovers the right tools and runs them.</p>
               <div style={{ width: "100%", maxWidth: 720 }}>
-                <AskBox value={draft} onChange={setDraft} onSend={() => send(draft)} onCommand={onCommand} disabled={running} autoFocus />
+                <AskBox value={draft} onChange={setDraft} onSend={() => send(draft)} onCommand={onCommand} disabled={running} attachments={attachments} onAttachmentsChange={setAttachments} autoFocus />
               </div>
               <div className="cats">
                 {EXAMPLE_CATS.map((c) => (
@@ -606,7 +623,7 @@ export function App() {
               </div>
             </div>
             <div className="composer">
-              <AskBox value={draft} onChange={setDraft} onSend={() => send(draft)} onCommand={onCommand} disabled={running} />
+              <AskBox value={draft} onChange={setDraft} onSend={() => send(draft)} onCommand={onCommand} disabled={running} attachments={attachments} onAttachmentsChange={setAttachments} />
             </div>
           </div>
         )}
@@ -671,6 +688,16 @@ function Message({ m, onOpenRaw, rawStore, pending, resolvedPerms, onDecide, cap
       <div className="msg msg--user">
         <div className="msg__role">You</div>
         <div className="msg__body">{m.content}</div>
+        {m.attachmentNames && m.attachmentNames.length > 0 && (
+          <div className="msg__attachments">
+            {m.attachmentNames.map((name) => (
+              <span key={name} className="filechip filechip--sent" title={name}>
+                <span className="filechip__icon" aria-hidden="true">📎</span>
+                <span className="filechip__name">{name}</span>
+              </span>
+            ))}
+          </div>
+        )}
       </div>
     );
   }
@@ -706,12 +733,17 @@ function Message({ m, onOpenRaw, rawStore, pending, resolvedPerms, onDecide, cap
   );
 }
 
+// Each attached file is capped at ~200KB read client-side.
+const MAX_ATTACH_BYTES = 200 * 1024;
+
 function AskBox({
   value,
   onChange,
   onSend,
   onCommand,
   disabled,
+  attachments,
+  onAttachmentsChange,
   autoFocus,
 }: {
   value: string;
@@ -719,6 +751,8 @@ function AskBox({
   onSend: () => void;
   onCommand?: (cmd: Command, arg: string) => void;
   disabled: boolean;
+  attachments?: Attachment[];
+  onAttachmentsChange?: (files: Attachment[]) => void;
   autoFocus?: boolean;
 }) {
   // The slash menu is shown when the draft starts with "/" and isn't yet a
@@ -727,6 +761,11 @@ function AskBox({
   const slashOpen = onCommand != null && value.startsWith("/");
   const navRef = useRef<SlashNav | null>(null);
 
+  const files = attachments ?? [];
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  // Inline notice when a non-text / too-large file is rejected.
+  const [attachNotice, setAttachNotice] = useState<string | null>(null);
+
   const runActive = () => {
     const nav = navRef.current;
     if (nav?.hasResults) {
@@ -734,6 +773,48 @@ function AskBox({
       return true;
     }
     return false;
+  };
+
+  // Read selected files client-side. Text files (by mime/extension) within the
+  // size cap are kept as {name, content}; anything else shows a friendly notice.
+  const onFilesPicked = (list: FileList | null) => {
+    if (!list || !onAttachmentsChange) return;
+    setAttachNotice(null);
+    const picked = Array.from(list);
+    const added: Attachment[] = [];
+    let pending = picked.length;
+    const finish = () => {
+      pending -= 1;
+      if (pending === 0 && added.length > 0) {
+        onAttachmentsChange([...(attachments ?? []), ...added]);
+      }
+    };
+    for (const file of picked) {
+      if (!isTextFile(file.name, file.type)) {
+        setAttachNotice(`"${file.name}" isn't supported — text files only for now.`);
+        finish();
+        continue;
+      }
+      if (file.size > MAX_ATTACH_BYTES) {
+        setAttachNotice(`"${file.name}" is too large (max 200KB).`);
+        finish();
+        continue;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        added.push({ name: file.name, content: typeof reader.result === "string" ? reader.result : "" });
+        finish();
+      };
+      reader.onerror = () => {
+        setAttachNotice(`Couldn't read "${file.name}".`);
+        finish();
+      };
+      reader.readAsText(file);
+    }
+  };
+
+  const removeAttachment = (name: string) => {
+    onAttachmentsChange?.(files.filter((f) => f.name !== name));
   };
 
   return (
@@ -747,7 +828,50 @@ function AskBox({
           onChoose={(cmd) => onCommand?.(cmd, value.replace(/^\/\S*\s*/, ""))}
         />
       )}
+      {onAttachmentsChange && (files.length > 0 || attachNotice) && (
+        <div className="attach-tray">
+          {files.map((f) => (
+            <span key={f.name} className="filechip" title={f.name}>
+              <span className="filechip__icon" aria-hidden="true">📎</span>
+              <span className="filechip__name">{f.name}</span>
+              <button
+                type="button"
+                className="filechip__remove"
+                aria-label={`Remove ${f.name}`}
+                onClick={() => removeAttachment(f.name)}
+              >
+                &times;
+              </button>
+            </span>
+          ))}
+          {attachNotice && <span className="attach-notice">{attachNotice}</span>}
+        </div>
+      )}
       <div className="ask">
+        {onAttachmentsChange && (
+          <>
+            <input
+              ref={fileInputRef}
+              type="file"
+              className="attach-input"
+              multiple
+              accept="text/*,.txt,.text,.md,.markdown,.rst,.log,.csv,.tsv,.json,.jsonl,.ndjson,.yaml,.yml,.toml,.ini,.env,.xml,.html,.htm,.css,.scss,.svg,.ts,.tsx,.js,.jsx,.mjs,.cjs,.py,.rb,.go,.rs,.java,.kt,.c,.h,.cc,.cpp,.hpp,.cs,.php,.swift,.sh,.bash,.zsh,.sql,.graphql,.gql,.vue,.svelte"
+              onChange={(e) => {
+                onFilesPicked(e.target.files);
+                e.target.value = "";
+              }}
+            />
+            <button
+              type="button"
+              className="ask__attach"
+              aria-label="Attach a text file"
+              title="Attach a text file"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              📎
+            </button>
+          </>
+        )}
         <textarea
           className="ask__input"
           value={value}
