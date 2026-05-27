@@ -45,3 +45,21 @@ export interface RawArtifact {
   requestId: string;
   data: unknown;
 }
+
+/** One tracked agent run (a chat turn or a batch row) shown in the Agents panel. */
+export interface AgentRun {
+  id: string;
+  /** Short label, e.g. the user's prompt or the batch row's inputs. */
+  title: string;
+  kind: "chat" | "batch";
+  status: "running" | "done" | "error";
+  startedAt: number;
+  endedAt?: number;
+  /** Paid tool spend for this run, in cents. */
+  costCents: number;
+  /** The run's tool trace, same shape the inline chat trace uses. */
+  steps: TraceStep[];
+  /** Streamed answer text. */
+  answer: string;
+  error?: string;
+}
