@@ -29,8 +29,9 @@ interface RunRow {
 interface Props {
   open: boolean;
   onClose: () => void;
-  /** Run one filled prompt as an isolated turn, resolving to its folded result. */
-  runRow: (prompt: string) => Promise<RowResult>;
+  /** Run one filled prompt as an isolated turn, resolving to its folded result.
+   *  `label` is a short human title for the row (shown in the Agents panel). */
+  runRow: (prompt: string, label?: string) => Promise<RowResult>;
 }
 
 /** Trigger a client-side file download from a string payload. */
@@ -96,7 +97,7 @@ export function BatchModal({ open, onClose, runRow }: Props) {
       async (row, i) => {
         patch(i, { status: "running" });
         try {
-          const result = await runRow(fillTemplate(skill.template, row.values));
+          const result = await runRow(fillTemplate(skill.template, row.values), row.cells.join(" · ") || skill.name);
           patch(i, { status: result.ok ? "done" : "error", result });
         } catch (err) {
           patch(i, {

@@ -23,7 +23,9 @@ import { API } from "./lib/config.ts";
 import { deleteConversation, getSettings, listConversations, putSettings, renameConversation, type ApiSettings, type Conversation } from "./lib/api.ts";
 import { PROVIDERS, defaultModelOf, providerOfModel } from "./lib/providers.ts";
 import { runCommand, type Command, type CommandContext } from "./lib/commands.ts";
-import type { ChatMessage, CostState, RawArtifact, TraceStep } from "./types.ts";
+import type { AgentRun, ChatMessage, CostState, RawArtifact, TraceStep } from "./types.ts";
+import { AgentsPanel } from "./components/AgentsPanel.tsx";
+import { applyTraceEventToRun, finishRun, newAgentRun } from "./lib/agentRuns.ts";
 
 const DEFAULT_SETTINGS: ApiSettings = {
   sessionCapCents: 500,
@@ -71,6 +73,8 @@ export function App() {
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [batchOpen, setBatchOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [agentsOpen, setAgentsOpen] = useState(false);
+  const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const rawStore = useRef(new Map<string, unknown>());
   const [activeId, setActiveId] = useState<string>(() => crypto.randomUUID());
@@ -211,6 +215,19 @@ export function App() {
     [],
   );
 
+  // ── Agent-run tracking (drives the Agents activity panel) ──
+  const startAgentRun = useCallback((title: string, kind: AgentRun["kind"]): string => {
+    const id = crypto.randomUUID();
+    setAgentRuns((prev) => [newAgentRun(id, title, kind), ...prev].slice(0, 40));
+    return id;
+  }, []);
+  const pushAgentEvent = useCallback((id: string, e: TraceEvent) => {
+    setAgentRuns((prev) => prev.map((r) => (r.id === id ? applyTraceEventToRun(r, e) : r)));
+  }, []);
+  const finishAgentRun = useCallback((id: string, override?: { status?: AgentRun["status"]; error?: string }) => {
+    setAgentRuns((prev) => prev.map((r) => (r.id === id ? finishRun(r, override) : r)));
+  }, []);
+
   const send = useCallback(
     async (text: string) => {
       if (!text.trim() || running) return;
@@ -222,11 +239,13 @@ export function App() {
         { id: `a_${Date.now()}`, role: "assistant", content: "", steps: [], streaming: true },
       ]);
       setRunning(true);
+      const runId = startAgentRun(text, "chat");
       try {
         await runTurn(text, {
           onEvent: (e) => {
             if (e.type === "tool_call_started") stepApi.current[e.stepId] = e.api;
             onEvent(e);
+            pushAgentEvent(runId, e);
           },
           requestPermission,
           rawStore: rawStore.current,
@@ -234,18 +253,17 @@ export function App() {
           capCents: cost.capCents,
           conversationId: activeId,
         });
+        finishAgentRun(runId);
       } catch (err) {
-        patchActive((m) => ({
-          ...m,
-          error: { code: "PROVIDER_DOWN", message: err instanceof Error ? err.message : "Couldn't reach Ortha. Check your connection and try again." },
-          streaming: false,
-        }));
+        const message = err instanceof Error ? err.message : "Couldn't reach Ortha. Check your connection and try again.";
+        patchActive((m) => ({ ...m, error: { code: "PROVIDER_DOWN", message }, streaming: false }));
+        finishAgentRun(runId, { status: "error", error: message });
       } finally {
         setRunning(false);
         refreshConversations();
       }
     },
-    [running, onEvent, requestPermission, cost.sessionCents, cost.capCents, activeId, refreshConversations, patchActive],
+    [running, onEvent, requestPermission, cost.sessionCents, cost.capCents, activeId, refreshConversations, patchActive, startAgentRun, pushAgentEvent, finishAgentRun],
   );
 
   // Run one batch row as an isolated turn: a fresh conversation id (so rows run
@@ -253,19 +271,30 @@ export function App() {
   // (side-effect) gates skipped (a batch runs unattended), events folded into a
   // single row result. Server-side caps still bound spend.
   const runBatchRow = useCallback(
-    async (prompt: string): Promise<RowResult> => {
+    async (prompt: string, label?: string): Promise<RowResult> => {
       const events: TraceEvent[] = [];
-      await runTurn(prompt, {
-        onEvent: (e) => events.push(e),
-        requestPermission: async (e) => ({ stepId: e.stepId, decision: e.kind === "side_effect" ? "skip" : "approve" }),
-        rawStore: new Map<string, unknown>(),
-        startCents: 0,
-        capCents: settings.sessionCapCents,
-        conversationId: crypto.randomUUID(),
-      });
-      return collectRow(events);
+      const runId = startAgentRun(label ?? prompt, "batch");
+      try {
+        await runTurn(prompt, {
+          onEvent: (e) => {
+            events.push(e);
+            pushAgentEvent(runId, e);
+          },
+          requestPermission: async (e) => ({ stepId: e.stepId, decision: e.kind === "side_effect" ? "skip" : "approve" }),
+          rawStore: new Map<string, unknown>(),
+          startCents: 0,
+          capCents: settings.sessionCapCents,
+          conversationId: crypto.randomUUID(),
+        });
+        const result = collectRow(events);
+        finishAgentRun(runId, result.ok ? undefined : { status: "error", ...(result.error ? { error: result.error } : {}) });
+        return result;
+      } catch (err) {
+        finishAgentRun(runId, { status: "error", error: err instanceof Error ? err.message : "run failed" });
+        throw err;
+      }
     },
-    [settings.sessionCapCents],
+    [settings.sessionCapCents, startAgentRun, pushAgentEvent, finishAgentRun],
   );
 
   const openRaw = useCallback((requestId: string) => {
@@ -381,6 +410,7 @@ export function App() {
   };
 
   const empty = messages.length === 0;
+  const agentsRunning = agentRuns.filter((r) => r.status === "running").length;
 
   if (!authChecked) {
     return (
@@ -527,6 +557,21 @@ export function App() {
             ariaLabel="Provider"
           />
           <button className="iconbtn" onClick={toggle} aria-label="Toggle theme">{applied === "dark" ? "☀" : "☾"}</button>
+          <button
+            className="iconbtn agents-toggle"
+            onClick={() => setAgentsOpen((o) => !o)}
+            aria-label="Toggle agents panel"
+            aria-pressed={agentsOpen}
+            title="Agents"
+          >
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="3" y="3" width="7" height="7" rx="1.5" />
+              <rect x="14" y="3" width="7" height="7" rx="1.5" />
+              <rect x="3" y="14" width="7" height="7" rx="1.5" />
+              <rect x="14" y="14" width="7" height="7" rx="1.5" />
+            </svg>
+            {agentsRunning > 0 && <span className="agents-toggle__badge">{agentsRunning}</span>}
+          </button>
         </header>
 
         {empty ? (
@@ -597,6 +642,14 @@ export function App() {
       <SkillsModal open={skillsOpen} onClose={() => setSkillsOpen(false)} onRun={(prompt) => void send(prompt)} />
       <BatchModal open={batchOpen} onClose={() => setBatchOpen(false)} runRow={runBatchRow} />
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} ctx={commandCtx} />
+      <AgentsPanel
+        runs={agentRuns}
+        open={agentsOpen}
+        onClose={() => setAgentsOpen(false)}
+        onClear={() => setAgentRuns([])}
+        onOpenRaw={openRaw}
+        rawStore={rawStore.current}
+      />
     </div>
   );
 }
