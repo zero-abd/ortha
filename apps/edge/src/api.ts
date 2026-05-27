@@ -15,7 +15,9 @@ export interface Skill {
   createdAt: number;
 }
 
-const MAX_TEMPLATE = 2000;
+// Big enough to hold an installed public skill's SKILL.md (capped at
+// MAX_PUBLIC_SKILL_CONTENT = 6000), not just a short hand-written template.
+const MAX_TEMPLATE = 8000;
 const MAX_NAME = 120;
 
 /** Cap on the SKILL.md body we surface for a public catalog skill — they can be large. */
