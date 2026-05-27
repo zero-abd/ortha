@@ -418,6 +418,60 @@ describe("runAgentTurn — tool_search", () => {
   });
 });
 
+describe("runAgentTurn — continue after narrated intent", () => {
+  it("nudges the model to act when it narrates a next tool step without calling it", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const llm = makeTurnScriptedLLM([
+      // turn 1: a result lacked the answer; the model narrates intent, no tool call.
+      [{ type: "token", text: "That didn't include the CEO. I will search for another tool." }, { type: "done", stopReason: "end" }],
+      // turn 2 (after the nudge): it actually searches.
+      [{ type: "tool_call_request", id: "s1", name: "search_tools", args: { query: "company leadership" } }, { type: "done", stopReason: "tool_use" }],
+      // turn 3: it answers.
+      [{ type: "token", text: "Patrick Collison is the CEO." }, { type: "done", stopReason: "end" }],
+    ]);
+    const events = await collect(baseDeps({ llm, onMessage }));
+
+    // It did NOT stop after the narrated-intent turn: a search happened and an answer followed.
+    expect(events.some((e) => e.type === "tool_search")).toBe(true);
+    const tokens = events.filter((e) => e.type === "token").map((e) => (e as { text: string }).text).join("");
+    expect(tokens).toContain("Patrick Collison is the CEO.");
+    expect(events.at(-1)).toEqual({ type: "done", stopReason: "end" });
+
+    // The synthetic nudge is never persisted to the transcript (no user-role onMessage with it).
+    const persistedNudge = onMessage.mock.calls.some(
+      ([m]) => (m as LLMMessage).role === "user" && (m as LLMMessage).content.includes("Continue now"),
+    );
+    expect(persistedNudge).toBe(false);
+  });
+
+  it("stops after the auto-continue cap if the model keeps narrating intent", async () => {
+    const intent: LLMEvent[] = [
+      { type: "token", text: "Let me search for another tool to find it." },
+      { type: "done", stopReason: "end" },
+    ];
+    const llm = makeTurnScriptedLLM([intent, intent, intent, intent, intent]);
+    const events = await collect(baseDeps({ llm }));
+
+    // Initial turn + 2 nudged turns = 3 streamed turns, then it gives up. One done, no loop.
+    expect(events.filter((e) => e.type === "done")).toHaveLength(1);
+    expect(events.some((e) => e.type === "tool_search")).toBe(false);
+    const intentCount = events.filter(
+      (e) => e.type === "token" && (e as { text: string }).text.includes("Let me search"),
+    ).length;
+    expect(intentCount).toBe(3);
+  });
+
+  it("does not nudge on a normal final answer with a closing offer", async () => {
+    const llm = makeTurnScriptedLLM([
+      [{ type: "token", text: "Patrick Collison is the CEO. Let me know if you want recent news." }, { type: "done", stopReason: "end" }],
+    ]);
+    const events = await collect(baseDeps({ llm }));
+    expect(events.filter((e) => e.type === "done")).toHaveLength(1);
+    const tokens = events.filter((e) => e.type === "token").map((e) => (e as { text: string }).text).join("");
+    expect(tokens).toBe("Patrick Collison is the CEO. Let me know if you want recent news.");
+  });
+});
+
 describe("runAgentTurn — iteration cap", () => {
   it("stops with max_tokens when the model never stops requesting tools", async () => {
     // Every turn requests a tool, so the loop must hit its iteration cap.
