@@ -13,10 +13,12 @@ A web-based AI chat app where the assistant has real, runtime access to **Orthog
 ## What it does
 
 - **Self-extending agent.** Instead of hard-wiring integrations, the model is given four meta-tools and discovers everything at runtime: `search_tools` (find an endpoint in Orthogonal's catalog), `get_tool_details` (inspect its schema/price/side-effects), `run_tool` (execute it through a budgeted harness), `expand_result` (pull a full payload on demand). It also has always-on, free `web_search` / `web_scrape`.
+- **Context-frugal tool calls — the core trick.** A single API response can be hundreds of KB, far too big to drop into the model's context. So `run_tool` **distills each result to a compact summary that goes into context, while the full raw payload is stored out-of-context** in the conversation's Durable Object, keyed by a `requestId`. The model reasons from the summary; only if that's insufficient does it call `expand_result(requestId)` to pull the full payload back in. The same applies to web scrapes. Together with history windowing and a rolling summary (see [Context-window management](#context-window-management)), this keeps the window small whether one response is huge or the conversation runs for hours — and it's why the trace's "Open raw" can still fetch the complete payload long after the turn.
 - **Real results.** "Enrich stripe.com with funding and team size," "Find VPs of Sales at Stripe," "What raised a Series A in fintech this month?" — the agent routes to the right catalog endpoint (Apollo, Fiber, Fundable, PredictLeads, Crustdata, ScrapeCreators, …) and returns grounded data, with web search for current/open-web questions.
 - **Provider-agnostic models.** Gemini 3 Flash (default) and Gemini 3 Pro, plus Anthropic, OpenAI, and OpenRouter adapters — switch provider/model in Settings.
-- **Skills.** Save reusable prompt workflows, or browse **Public skills** pulled live from `orthogonal.com/skills` (1 command to "Add to my skills," then run via `/<skill>`). The agent executes the skill's `SKILL.md` using the catalog/web tools.
-- **Transparent + safe.** Every tool call streams to a live trace (and an Agents panel). Expensive calls and any **write/side-effect** (e.g. sending an email) pause for explicit approval. Per-conversation and monthly **spend caps** are enforced at the database.
+- **Skills.** Save reusable prompt workflows, or browse **Public skills** pulled live from `orthogonal.com/skills` (one click to "Add to my skills," then run via `/<skill>`). A skill runs **inline** in the same agent loop — its `SKILL.md` drives the catalog/web tools, and its tool results distill exactly like any other turn's.
+- **Parallel agent runs.** Every turn is tracked as an independent "run" in an **Agents panel**; **Batch** fans the same prompt across many inputs (e.g. enrich 50 domains), each its own agent run streaming the same trace and distilling its own results — so a bulk job neither bloats nor blocks your main chat.
+- **Transparent + safe.** Every tool call streams to a live trace. Expensive calls and any **write/side-effect** (e.g. sending an email) pause for explicit approval. Per-conversation and monthly **spend caps** are enforced at the database.
 - **Rich rendering.** Answers render as full GitHub-flavored markdown — tables, fenced/highlighted code, LaTeX — streamed token-by-token.
 - **Accounts.** Email+password and Google sign-in; conversations + settings persist and sync.
 
@@ -66,7 +68,7 @@ Everything runs on Cloudflare's edge. The Worker is a stateless router; all per-
 | `context` | Prompt-window assembly under a token budget, rolling conversation summary, retrieval, token estimation. |
 | `budget` | Reservation policy (reserve → run → settle/refund). |
 | `auth` | PBKDF2 password hashing, session tokens, Google OAuth exchange. |
-| `db` | D1/SQLite stores (conversations, spend, journal) with the atomic-spend logic. |
+| `db` | D1/SQLite stores: the conversation transcript (messages + tool metadata) and the atomic-spend logic (`tryReserveSpend`). |
 | `apps/edge` | The Worker, the `ConversationDO`, and all routes. |
 | `apps/web` | The React UI. |
 
@@ -91,23 +93,24 @@ Everything runs on Cloudflare's edge. The Worker is a stateless router; all per-
 
 ### Context-window management
 
-Two pressures: large API responses, and long history. Handled in three layers:
+Two pressures: large API responses, and long history. Handled in four layers:
 
-1. **Tool results are distilled.** `run_tool` returns a compact summary into the model's context; the **full raw payload is stored out-of-context** in the DO (`raw_blobs`) and only pulled back via `expand_result(requestId)` if the summary is insufficient. So a 900KB enrichment response never blows the window.
+1. **Tool results are distilled.** `run_tool` returns a compact summary into the model's context (and only the summary + `requestId` is fed back to the model); the **full raw payload is stored out-of-context** in the DO (`raw_blobs`) and only pulled back via `expand_result(requestId)` if the summary is insufficient. So a 900KB enrichment response never blows the window — but the complete data is one fetch away.
 2. **History is windowed.** `loadWindow` assembles the most-recent messages that fit a token budget (`HISTORY_BUDGET_TOKENS = 8000`, approximating tokens as chars/4), oldest-first, and never opens on an orphaned tool result whose parent call was trimmed.
-3. **Rolling summary.** Older turns are condensed into a running summary so multi-hour conversations stay bounded instead of growing unbounded.
+3. **Rolling summary.** Older turns that age out of the window are folded into a running summary, injected as a system note, so multi-hour conversations stay bounded instead of growing unbounded.
+4. **Images stay out of the transcript.** Vision attachments are sent on the turn the model needs them but are *not* written to the persisted message store — they'd bloat both the window and storage on every reload.
 
 The per-call **output ceiling is 8192 tokens** — deliberately generous because "thinking" models (Gemini 3) spend output tokens on hidden reasoning *before* the answer; too small a ceiling truncates research answers mid-sentence.
 
 ### Persistence
 
-Conversations live in their Durable Object's SQLite, keyed by conversation id and reachable from any device. The transcript is rehydrated on reconnect — including the tool-call messages with their requestIds, so cross-turn `expand_result` still works after you leave and return. Accounts (email+password / Google) anchor identity; **chats and settings sync per workspace**, while BYOK API keys stay device-local and are never synced. Conversation titles are auto-summarized by a cheap model so the sidebar stays readable.
+Conversations live in their Durable Object's SQLite, keyed by conversation id and reachable from any device. The transcript is rehydrated on reconnect — including the tool-call messages with their requestIds, so cross-turn `expand_result` still works after you leave and return. Reopening a conversation also **reconstructs its agent-trace blocks from the stored transcript** — the collapsible `run_tool` / web steps come back with their api · path · status, price, latency, and a working "Open raw" — so a returning user sees the same chat they left, not just bare text. Accounts (email+password / Google) anchor identity; **chats and settings sync per workspace**, while BYOK API keys stay device-local and are never synced. Conversation titles are auto-summarized by a cheap model so the sidebar stays readable.
 
 ### Concurrency — many users hitting the same APIs
 
 - **Per-conversation isolation.** One Durable Object per conversation serializes that conversation's turns (no in-conversation races), while unrelated conversations/users run fully in parallel.
-- **No overspend, enforced by the DB.** A tool call reserves budget via `tryReserveSpend` — a **single conditional `UPDATE` with the cap check in the `WHERE` clause**. SQLite's single-writer guarantees correctness under concurrent reservations without app-level locks; over-cap reservations simply don't apply.
-- **Idempotency.** Every call is journaled write-once (`INSERT OR IGNORE` on a deterministic idempotency key), so a retried or duplicated call never double-executes or double-charges a paid API.
+- **No overspend, enforced by the DB.** A tool call reserves budget via an atomic `tryReserve` — a **single conditional `UPDATE` with the cap check in the `WHERE` clause** (`reserved + settled + new <= cap`). The single-writer DB guarantees correctness under concurrent reservations without app-level locks; an over-cap reservation simply changes zero rows and is refused. Reserve → run → settle/refund, so an estimate that came in high is released back.
+- **Replay-safe reservations.** Each call gets a deterministic idempotency key (`<conversation>::<step>`); re-reserving that key returns the *existing* hold rather than a second one, so a retried call within a turn never double-reserves or double-charges. (The `tool_calls` / `call_journal` tables exist in the schema as a relational mirror but aren't on the live hot path — the DO's transcript + the budget store are the source of truth.)
 - **Fast-fail on a struggling upstream.** A per-provider **circuit breaker** (30s cooldown) means that if an Orthogonal endpoint is failing, concurrent requests trip the breaker and fail fast instead of all 50 piling into 30-second timeouts.
 
 ### When an API is slow or down
@@ -127,7 +130,7 @@ Conversations live in their Durable Object's SQLite, keyed by conversation id an
 ```bash
 bun install
 
-# typecheck + tests (320+ unit tests across packages)
+# typecheck + tests (370+ unit tests across packages)
 bun run typecheck
 bun run test
 
@@ -146,7 +149,6 @@ Deploy: `wrangler deploy` (worker) and `wrangler pages deploy dist --project-nam
 
 - **Tool-selection determinism.** The same prompt can occasionally route to different catalog endpoints; I'd rank/pin endpoints per intent and cache the chosen endpoint per conversation so results are reproducible and costs predictable.
 - **Connectors.** The Connectors surface ships with a Gmail card scaffold; I'd finish the OAuth + give the agent a first-class Gmail tool (read/draft/send behind the existing side-effect gate).
-- **Streaming-aware output guard.** Buffer only a short prefix for the prompt-injection echo-check so answers stream fully live while still being redactable.
 - **Provider-error sanitization + auto-continue** on `max_tokens` so a truncated answer is transparently continued rather than relying solely on a generous ceiling.
 - **Semantic retrieval over history** (embeddings) instead of a pure recency window, so older but relevant turns resurface.
 - **Observability**: structured per-turn metrics (tool latency, cost, truncation rate) and dashboards; today the trace is per-conversation only.
