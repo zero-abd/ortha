@@ -25,7 +25,7 @@ import { fetchHistory } from "./live.ts";
 import { AuthScreen } from "./components/AuthScreen.tsx";
 import { loginGoogle, logout, me, type AuthUser } from "./lib/auth.ts";
 import { API } from "./lib/config.ts";
-import { deleteConversation, getSettings, listConversations, listSkills, putSettings, renameConversation, type ApiSettings, type Conversation, type Skill } from "./lib/api.ts";
+import { deleteConversation, fetchRawResult, getSettings, listConversations, listSkills, putSettings, renameConversation, type ApiSettings, type Conversation, type Skill } from "./lib/api.ts";
 import { modelInfo, modelsForProvider, PROVIDERS, defaultModelOf, providerOfModel } from "./lib/providers.ts";
 import { runCommand, setSkillCommands, skillCommand, type Command, type CommandContext } from "./lib/commands.ts";
 import { wrapResearch } from "./lib/research.ts";
@@ -108,7 +108,10 @@ export function App() {
   const [costLive, setCostLive] = useState(false);
   const [breakdown, setBreakdown] = useState<{ api: string; cents: number }[]>([]);
   const [pending, setPending] = useState<Pending | null>(null);
-  const [resolvedPerms, setResolvedPerms] = useState<Record<string, "approved" | "skipped">>({});
+  // Resolved permission gates, keyed by stepId. We keep the cost the user actually
+  // approved (not 0): the gate's estimate at resolve time, then the real charge once the
+  // tool returns — so the "Approved a $X step" chip matches the trace line, never $0.00.
+  const [resolvedPerms, setResolvedPerms] = useState<Record<string, { outcome: "approved" | "skipped"; estCents: number; dynamic?: boolean }>>({});
   const [panel, setPanel] = useState<RawArtifact | null>(null);
   const [settings, setSettings] = useState<ApiSettings>(DEFAULT_SETTINGS);
   const model = settings.model;
@@ -243,6 +246,9 @@ export function App() {
             ),
           }));
           if (e.ok && e.priceCents > 0) setBreakdown((b) => mergeSpend(b, apiForStep(e.stepId), e.priceCents));
+          // If this step was a confirmed gate, show the ACTUAL charge in its approval chip
+          // (the estimate may have been a dynamic-price floor — see the resolvedPerms note).
+          setResolvedPerms((prev) => (prev[e.stepId] ? { ...prev, [e.stepId]: { ...prev[e.stepId]!, estCents: e.priceCents } } : prev));
           break;
         case "self_heal":
           patchActive((m) => ({
@@ -274,7 +280,7 @@ export function App() {
         setPending({
           event: e,
           resolve: (r) => {
-            setResolvedPerms((prev) => ({ ...prev, [e.stepId]: r.decision === "skip" || r.decision === "cancel" ? "skipped" : "approved" }));
+            setResolvedPerms((prev) => ({ ...prev, [e.stepId]: { outcome: r.decision === "skip" || r.decision === "cancel" ? "skipped" : "approved", estCents: e.estCents, ...(e.dynamic ? { dynamic: true } : {}) } }));
             if (r.decision === "raise_cap" && r.newCapCents) setCost((c) => ({ ...c, capCents: r.newCapCents! }));
             setPending(null);
             resolve(r);
@@ -389,9 +395,17 @@ export function App() {
     [settings.sessionCapCents, startAgentRun, pushAgentEvent, finishAgentRun],
   );
 
-  const openRaw = useCallback((requestId: string) => {
-    setPanel({ title: requestId, requestId, data: rawStore.current.get(requestId) ?? { note: "no raw stored" } });
-  }, []);
+  const openRaw = useCallback(
+    (requestId: string) => {
+      // Open the panel immediately, then pull the full server-side raw payload (what the
+      // agent stored out-of-context). Fall back to the inline summary if the fetch fails.
+      setPanel({ title: requestId, requestId, data: { loading: true } });
+      void fetchRawResult(activeId, requestId).then((data) => {
+        setPanel((p) => (p && p.requestId === requestId ? { ...p, data: data ?? rawStore.current.get(requestId) ?? { note: "Raw payload unavailable." } } : p));
+      });
+    },
+    [activeId],
+  );
 
   const resetSession = () => {
     setMessages([]);
@@ -479,7 +493,7 @@ export function App() {
     setMessages(
       hist
         .filter((m) => m.role === "user" || m.role === "assistant")
-        .map((m, i) => ({ id: `h_${i}`, role: m.role as "user" | "assistant", content: m.content, steps: [], streaming: false })),
+        .map((m, i) => ({ id: `h_${i}`, role: m.role as "user" | "assistant", content: m.content, steps: m.steps ?? [], streaming: false })),
     );
   };
 
@@ -813,7 +827,7 @@ interface MessageProps {
   onOpenRaw: (id: string) => void;
   rawStore: Map<string, unknown>;
   pending: Pending | null;
-  resolvedPerms: Record<string, "approved" | "skipped">;
+  resolvedPerms: Record<string, { outcome: "approved" | "skipped"; estCents: number; dynamic?: boolean }>;
   onDecide: (r: PermissionResponse) => void;
   cap: number;
   session: number;
@@ -868,8 +882,8 @@ function Message({ m, onOpenRaw, rawStore, pending, resolvedPerms, onDecide, cap
         {m.steps.map((s: TraceStep) => (
           <TraceBlock key={s.stepId} step={s} onOpenRaw={onOpenRaw} raw={s.requestId ? rawStore.get(s.requestId) : undefined} />
         ))}
-        {Object.entries(resolvedPerms).map(([stepId, outcome]) => (
-          <ApprovalChip key={`r_${stepId}`} stepId={stepId} estCents={0} sessionCents={session} capCents={cap} resolved={outcome} onDecide={onDecide} />
+        {Object.entries(resolvedPerms).map(([stepId, info]) => (
+          <ApprovalChip key={`r_${stepId}`} stepId={stepId} estCents={info.estCents} sessionCents={session} capCents={cap} dynamic={info.dynamic} resolved={info.outcome} onDecide={onDecide} />
         ))}
         {showCostChip && pending && (
           <ApprovalChip stepId={pending.event.stepId} estCents={pending.event.estCents} sessionCents={pending.event.sessionCents} capCents={pending.event.capCents} dynamic={pending.event.dynamic} onDecide={onDecide} />

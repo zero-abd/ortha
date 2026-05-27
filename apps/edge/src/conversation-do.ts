@@ -19,6 +19,7 @@ import {
   isSystemPromptEcho,
   SYSTEM_PROMPT_REFUSAL,
 } from "./guards.js";
+import { reconstructHistory } from "./history.js";
 import { buildLivePorts } from "./ports.js";
 import { createSqlRawStore, RAW_BLOBS_DDL } from "./raw-store.js";
 import { DurableSpendStore, SESSION_SPEND_DDL, WORKSPACE_SPEND_DDL } from "./spend-store.js";
@@ -83,6 +84,17 @@ export class ConversationDO implements DurableObject {
         await this.clearStoredData().catch(() => {});
         return Response.json({ ok: true });
       }
+      // "Open raw" panel: GET .../raw/:requestId returns the full out-of-context tool
+      // payload this conversation stored (the same blob `expand_result` reads). Auth
+      // already happened in the Worker, which forwards only after validating the session.
+      const rawMatch = url.pathname.match(/\/raw\/([^/]+)$/);
+      if (request.method === "GET" && rawMatch) {
+        await this.init();
+        const requestId = decodeURIComponent(rawMatch[1]!);
+        const data = await createSqlRawStore(this.db).get(requestId);
+        if (data === null || data === undefined) return Response.json({ error: "not_found" }, { status: 404 });
+        return Response.json({ requestId, raw: data });
+      }
       return Response.json({ ok: true, durableObject: "ConversationDO", id: this.ctx.id.toString() });
     }
     const pair = new WebSocketPair();
@@ -124,11 +136,13 @@ export class ConversationDO implements DurableObject {
   private async sendHistory(ws: WebSocket): Promise<void> {
     await this.init();
     const msgs = await this.store.loadWindow(this.conversationId, HISTORY_BUDGET_TOKENS);
-    // The transcript now includes tool-call plumbing (assistant tool-call turns +
-    // tool results) for cross-turn expand. The UI only wants real chat turns, so
-    // show user messages and assistant messages that actually said something.
-    const visible = msgs.filter((m) => m.role === "user" || (m.role === "assistant" && m.content.trim().length > 0));
-    ws.send(JSON.stringify({ type: "history", messages: visible.map((m) => ({ role: m.role, content: m.content })) }));
+    // The transcript stores tool-call plumbing (assistant tool-call turns + tool
+    // results) alongside the real chat turns. Reconstruct the per-turn agent-trace
+    // blocks from that plumbing so a re-opened conversation shows the collapsible
+    // tool-call lines (api · path · status, with the requestId for "Open raw") just
+    // as they appeared live — not only the plain user/assistant text.
+    const messages = reconstructHistory(msgs);
+    ws.send(JSON.stringify({ type: "history", messages }));
   }
 
   private async onMessage(ws: WebSocket, ev: MessageEvent): Promise<void> {
@@ -357,7 +371,7 @@ export class ConversationDO implements DurableObject {
       // turns + tool results, then the final answer). This is what makes cross-turn
       // expand_result reachable: a later turn reloads the requestId-bearing tool
       // messages. The user message was already persisted above.
-      onMessage: async (m) => {
+      onMessage: async (m, meta) => {
         // Mirror the streamed echo guard into the persisted transcript: if a final
         // assistant answer is a verbatim system-prompt dump, store the refusal instead
         // of the leak, so a later history reload can't re-serve it. Only plain
@@ -374,6 +388,10 @@ export class ConversationDO implements DurableObject {
           ...(m.toolCalls ? { toolCalls: m.toolCalls } : {}),
           ...(m.toolCallId ? { toolCallId: m.toolCallId } : {}),
           ...(m.toolName ? { toolName: m.toolName } : {}),
+          // Cost + latency of this tool result, persisted so a reopened conversation
+          // shows the same price/latency on the restored trace block as it did live.
+          ...(typeof meta?.priceCents === "number" ? { priceCents: meta.priceCents } : {}),
+          ...(typeof meta?.latencyMs === "number" ? { latencyMs: meta.latencyMs } : {}),
         });
       },
     };

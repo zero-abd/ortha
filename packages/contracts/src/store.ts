@@ -26,6 +26,9 @@ export interface NewMessage {
   /** role==="tool": the call this answers + the tool's name. */
   readonly toolCallId?: string;
   readonly toolName?: string;
+  /** role==="tool": persisted cost + latency for the restored trace block. */
+  readonly priceCents?: number;
+  readonly latencyMs?: number;
 }
 
 export interface NewToolCall {

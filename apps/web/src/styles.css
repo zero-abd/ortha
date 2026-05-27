@@ -433,6 +433,7 @@ input:focus, textarea:focus { outline: none; border-color: var(--ink-soft); }
 .panel__title { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .panel__body { flex: 1; overflow: auto; padding: 14px; }
 .panel__raw { font-size: 12px; white-space: pre-wrap; word-break: break-word; color: var(--muted); margin: 0; }
+.panel__loading { font-size: 12px; color: var(--muted); padding: 8px 0; }
 
 /* ── Modals ────────────────────────────────────────────────────────────── */
 .modal-scrim, .settings-scrim { position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,0.32); display: flex; align-items: center; justify-content: center; padding: 24px; }

@@ -71,6 +71,8 @@ interface ToolMeta {
   toolCalls?: readonly { readonly id: string; readonly name: string; readonly args: Record<string, unknown> }[];
   toolCallId?: string;
   toolName?: string;
+  priceCents?: number;
+  latencyMs?: number;
 }
 
 function parseToolMeta(v: SqlParam | undefined): ToolMeta {
@@ -88,6 +90,8 @@ function toolMetaJson(m: NewMessage): string {
   if (m.toolCalls && m.toolCalls.length > 0) meta.toolCalls = m.toolCalls;
   if (m.toolCallId) meta.toolCallId = m.toolCallId;
   if (m.toolName) meta.toolName = m.toolName;
+  if (typeof m.priceCents === "number") meta.priceCents = m.priceCents;
+  if (typeof m.latencyMs === "number") meta.latencyMs = m.latencyMs;
   return JSON.stringify(meta);
 }
 
@@ -104,6 +108,8 @@ function rowToMessage(r: SqlRow): Message {
     ...(meta.toolCalls ? { toolCalls: meta.toolCalls } : {}),
     ...(meta.toolCallId ? { toolCallId: meta.toolCallId } : {}),
     ...(meta.toolName ? { toolName: meta.toolName } : {}),
+    ...(typeof meta.priceCents === "number" ? { priceCents: meta.priceCents } : {}),
+    ...(typeof meta.latencyMs === "number" ? { latencyMs: meta.latencyMs } : {}),
   };
 }
 
@@ -201,6 +207,8 @@ export function createStore(db: SqlDb): ConversationStore {
         ...(message.toolCalls ? { toolCalls: message.toolCalls } : {}),
         ...(message.toolCallId ? { toolCallId: message.toolCallId } : {}),
         ...(message.toolName ? { toolName: message.toolName } : {}),
+        ...(typeof message.priceCents === "number" ? { priceCents: message.priceCents } : {}),
+        ...(typeof message.latencyMs === "number" ? { latencyMs: message.latencyMs } : {}),
       };
     },
 

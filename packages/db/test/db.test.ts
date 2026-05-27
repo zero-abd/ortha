@@ -91,6 +91,8 @@ describe("conversation + message CRUD", () => {
       content: "ctx /scrape -> Example Domain (requestId: run_X)",
       toolCallId: "call_1",
       toolName: "run_tool",
+      priceCents: 2.5,
+      latencyMs: 4840,
     });
 
     const all = await store.loadWindow(conv.id, 1_000_000);
@@ -99,6 +101,10 @@ describe("conversation + message CRUD", () => {
     const tool = all.find((m) => m.role === "tool");
     expect(tool?.toolCallId).toBe("call_1");
     expect(tool?.toolName).toBe("run_tool");
+    // Price (fractional cent) + latency round-trip via toolMeta, so a reopened
+    // conversation can show them on the restored trace block.
+    expect(tool?.priceCents).toBe(2.5);
+    expect(tool?.latencyMs).toBe(4840);
     // The requestId survives in the tool content, so a later turn can expand_result it.
     expect(tool?.content).toContain("run_X");
   });

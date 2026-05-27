@@ -63,6 +63,10 @@ export interface Message {
   readonly toolCallId?: string;
   /** role==="tool": the tool's name (providers like Gemini require it on the result). */
   readonly toolName?: string;
+  /** role==="tool": what the call cost / how long it took, persisted so a reopened
+   *  conversation shows price + latency on the restored trace block (not just api·path). */
+  readonly priceCents?: number;
+  readonly latencyMs?: number;
 }
 
 export interface ToolCall {
