@@ -430,7 +430,7 @@ export function App() {
           <span className="brand__word">Ortha</span>
         </div>
 
-        <button className="discover-btn" onClick={() => setDiscoverOpen(true)}>
+        <button className="discover-btn" onClick={() => { setSidebarOpen(false); setDiscoverOpen(true); }}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <circle cx="11" cy="11" r="7" />
             <line x1="21" y1="21" x2="16.65" y2="16.65" />
@@ -438,14 +438,14 @@ export function App() {
           <span>Discover APIs</span>
         </button>
 
-        <button className="discover-btn" onClick={() => setSkillsOpen(true)}>
+        <button className="discover-btn" onClick={() => { setSidebarOpen(false); setSkillsOpen(true); }}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
           </svg>
           <span>Skills</span>
         </button>
 
-        <button className="discover-btn" onClick={() => setBatchOpen(true)}>
+        <button className="discover-btn" onClick={() => { setSidebarOpen(false); setBatchOpen(true); }}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <line x1="8" y1="6" x2="21" y2="6" />
             <line x1="8" y1="12" x2="21" y2="12" />
@@ -532,7 +532,7 @@ export function App() {
             <span>Session</span>
             <span className="balance__amt">${(cost.sessionCents / 100).toFixed(2)} / ${(cost.capCents / 100).toFixed(2)}</span>
           </div>
-          <button className="acct" onClick={() => setSettingsOpen(true)} aria-label="Account and settings">
+          <button className="acct" onClick={() => { setSidebarOpen(false); setSettingsOpen(true); }} aria-label="Account and settings">
             <span className="acct__avatar">{(user.displayName ?? user.email ?? "U").charAt(0).toUpperCase()}</span>
             <span className="acct__name">{user.displayName ?? user.email ?? "Account"}</span>
             <span className="acct__chev">⚙</span>
