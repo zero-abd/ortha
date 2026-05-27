@@ -14,6 +14,7 @@ import { SkillsModal } from "./components/SkillsModal.tsx";
 import { BatchModal } from "./components/BatchModal.tsx";
 import { collectRow, type RowResult } from "./lib/batch.ts";
 import { TraceBlock } from "./components/TraceBlock.tsx";
+import { Sources } from "./components/Sources.tsx";
 import { useTheme } from "./lib/useTheme.ts";
 import { runTurn } from "./transport.ts";
 import { fetchHistory } from "./live.ts";
@@ -689,6 +690,7 @@ function Message({ m, onOpenRaw, rawStore, pending, resolvedPerms, onDecide, cap
           <ApprovalChip stepId={pending.event.stepId} estCents={pending.event.estCents} sessionCents={pending.event.sessionCents} capCents={pending.event.capCents} dynamic={pending.event.dynamic} onDecide={onDecide} />
         )}
         {m.content && <div className="md">{m.content}</div>}
+        <Sources steps={m.steps} />
         {m.streaming && !m.content && m.steps.length === 0 && (
           <div className="thinking">
             <Spinner size={16} />
