@@ -18,23 +18,6 @@ import { deleteSkill, getPublicSkills, listSkills, type PublicSkill, saveSkill, 
  *  MAX_PUBLIC_SKILL_CONTENT so the full SKILL.md (longest catalog skill is ~22k) runs. */
 const MAX_PUBLIC_PROMPT_CHARS = 25000;
 
-/** Extract unique `{var}` placeholder names from a template, in first-seen order. */
-export function extractVars(template: string): string[] {
-  const out: string[] = [];
-  const re = /\{([a-zA-Z0-9_ -]+)\}/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(template))) {
-    const name = m[1]!.trim();
-    if (name && !out.includes(name)) out.push(name);
-  }
-  return out;
-}
-
-/** Replace every `{var}` with its provided value (missing values become ""). */
-export function fillTemplate(template: string, values: Record<string, string>): string {
-  return template.replace(/\{([a-zA-Z0-9_ -]+)\}/g, (_, raw: string) => values[raw.trim()] ?? "");
-}
-
 /** Build the prompt run when a public skill is "used": the SKILL.md content, capped. */
 export function publicSkillPrompt(skill: Pick<PublicSkill, "content" | "description">): string {
   const body = (skill.content || skill.description || "").trim();
@@ -399,6 +382,3 @@ function PublicSkillCard({
     </article>
   );
 }
-
-// (Skills run directly now — no per-field form. `extractVars`/`fillTemplate` remain
-// exported for callers/tests that still compose templates.)
