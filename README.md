@@ -10,6 +10,20 @@ A web-based AI chat app where the assistant has real, runtime access to **Orthog
 
 ---
 
+## How it handles the hard parts
+
+The five system-design challenges this project calls out — each is a deliberate part of the design, detailed further down:
+
+| Challenge | How Ortha handles it |
+|---|---|
+| **The context window fills up** — big API responses *and* long history | Tool results are **distilled** into context while the full payload is stored **out-of-context** and pulled back only on demand (`expand_result`); history is windowed and older turns fold into a **rolling summary**. → [Context-window management](#context-window-management) |
+| **Conversations must persist** — leave and come back | Each conversation is a **Durable Object with its own SQLite**; reopening rehydrates the transcript *and* reconstructs the agent-trace blocks (with price/latency/Open-raw), synced across devices by account. → [Persistence](#persistence) |
+| **System design** — databases, architecture, scale | Stateless Worker router → **one Durable Object per conversation** (SQLite) + **KV** (sessions/settings/keys) + **D1** (accounts/spend); scales **horizontally by conversation**. → [System design](#system-design) |
+| **Many users hitting the same APIs** | Every conversation is an **isolated DO** (no cross-user contention); spend is enforced **atomically per workspace**; within a turn, identical calls are **coalesced** and a failing endpoint trips a **per-provider circuit breaker**. → [Concurrency](#concurrency-many-users-hitting-the-same-apis) |
+| **An API is slow or down** | The chat **never hangs or dead-ends**: a call times out at 30s, a failure surfaces in the trace and is fed back so the agent **adapts** — another endpoint, or an answer from what it already has. → [When an API is slow or down](#when-an-api-is-slow-or-down) |
+
+---
+
 ## What it does
 
 - **Self-extending agent.** Instead of hard-wiring integrations, the model is given four meta-tools and discovers everything at runtime: `search_tools` (find an endpoint in Orthogonal's catalog), `get_tool_details` (inspect its schema/price/side-effects), `run_tool` (execute it through a budgeted harness), `expand_result` (pull a full payload on demand). It also has always-on, free `web_search` / `web_scrape`.
@@ -106,22 +120,26 @@ The per-call **output ceiling is 8192 tokens** — deliberately generous because
 
 Conversations live in their Durable Object's SQLite, keyed by conversation id and reachable from any device. The transcript is rehydrated on reconnect — including the tool-call messages with their requestIds, so cross-turn `expand_result` still works after you leave and return. Reopening a conversation also **reconstructs its agent-trace blocks from the stored transcript** — the collapsible `run_tool` / web steps come back with their api · path · status, price, latency, and a working "Open raw" — so a returning user sees the same chat they left, not just bare text. Accounts (email+password / Google) anchor identity; **chats and settings sync per workspace**, while BYOK API keys stay device-local and are never synced. Conversation titles are auto-summarized by a cheap model so the sidebar stays readable.
 
-### Concurrency — many users hitting the same APIs
+### Concurrency: many users hitting the same APIs
 
-- **Per-conversation isolation.** One Durable Object per conversation serializes that conversation's turns (no in-conversation races), while unrelated conversations/users run fully in parallel.
-- **No overspend, enforced by the DB.** A tool call reserves budget via an atomic `tryReserve` — a **single conditional `UPDATE` with the cap check in the `WHERE` clause** (`reserved + settled + new <= cap`). The single-writer DB guarantees correctness under concurrent reservations without app-level locks; an over-cap reservation simply changes zero rows and is refused. Reserve → run → settle/refund, so an estimate that came in high is released back.
-- **Replay-safe reservations.** Each call gets a deterministic idempotency key (`<conversation>::<step>`); re-reserving that key returns the *existing* hold rather than a second one, so a retried call within a turn never double-reserves or double-charges. (The `tool_calls` / `call_journal` tables exist in the schema as a relational mirror but aren't on the live hot path — the DO's transcript + the budget store are the source of truth.)
-- **Fast-fail on a struggling upstream.** A per-provider **circuit breaker** (30s cooldown) means that if an Orthogonal endpoint is failing, concurrent requests trip the breaker and fail fast instead of all 50 piling into 30-second timeouts.
+**The direct answer:** concurrent users never contend inside Ortha and can't overspend or corrupt one another; and within a turn, repeated calls to the *same* endpoint are collapsed and a failing one fails fast. Why:
+
+- **Isolated by conversation.** Each conversation is its own Durable Object, so unrelated users and conversations run fully in parallel with **no shared in-process state to contend on** and no global lock or queue in the hot path. The Worker layer is stateless and auto-scales. (Within a single conversation, turns are serialized — one in-flight per DO — so there's no in-conversation race either.)
+- **No overspend, enforced by the DB.** Spend is per-workspace: each tool call reserves budget with an atomic conditional `UPDATE` (`reserved + settled + new <= cap` in the `WHERE`). Concurrent reservations stay correct with no app-level lock — an over-cap one changes zero rows and is refused — so one user's burst can't blow another's cap or race the meter. Reserve → run → settle/refund releases a high estimate back.
+- **Same endpoint, within a turn: dedupe + breaker.** The Orthogonal client wraps calls in an **in-flight dedupe cache** — identical concurrent `{api, path, body, query}` calls collapse into a single upstream request — and a **per-provider circuit breaker** (opens after 5 consecutive failures, 30s cooldown, half-open probe). So a turn that fans out to one endpoint neither sends N duplicate requests nor piles N callers into N timeouts against a struggling provider.
+- **Honest scope + next step.** That dedupe cache and breaker live in the per-turn client instance, so today they protect *within* a conversation turn. A **shared, cross-user cache / rate-limiter / breaker** (in KV or a coordinator DO) is the next scaling step for fleet-wide protection of a single hot upstream — see [What I'd do with more time](#what-id-do-with-more-time).
 
 ### When an API is slow or down
 
-- **Hard 30s timeout** per Orthogonal call (`AbortController`), matching the Worker fetch budget.
-- **Retry with backoff** for retryable *reads*; **writes are never retried** (an ambiguous timeout on a write must not double-charge).
-- **Circuit breaker** trips after repeated failures and short-circuits for a cooldown.
-- **A failed tool never aborts the turn.** The error is fed back to the model as a tool result, so it can try a different endpoint or answer with what it already has — the user never gets an empty bubble.
-- **Free web tools degrade gracefully.** Rate-limits/bot-blocks are non-fatal and fed back; known bot-walled hosts short-circuit instantly; scrapes hard-cap (~10s) and run in parallel for multi-page reads.
-- **Long-running (submit→poll) endpoints** that can't finish in 30s (crawls, async deep-research) are refused up front rather than aborted-but-charged, and the agent picks a synchronous alternative.
-- **Cost & side-effect gates.** Expensive or state-changing calls pause for explicit user approval, streamed inline; declining cleanly cancels with nothing sent.
+**How the chat behaves:** it stays responsive and *always* resolves — you never get a hung spinner or an empty bubble. A slow call is abandoned at 30s; a failed call shows up as a failed step in the live trace; and the agent keeps going, trying a different endpoint or answering with what it already gathered. Under the hood:
+
+- **Hard 30s timeout** per Orthogonal call (`AbortController`), matching the Worker fetch budget — a hanging upstream can't stall the turn.
+- **Retry with backoff** for retryable *reads*; **writes are never retried** (`run` passes 0 retries) — an ambiguous timeout on a paid write must not double-charge.
+- **Per-provider circuit breaker** opens after 5 repeated failures and short-circuits for a 30s cooldown, so the agent stops hammering a known-bad endpoint and routes elsewhere.
+- **A failed tool never aborts the turn.** The error is fed back to the model as the tool result, so it self-corrects (different endpoint, or answer with what it has) instead of ending on an error.
+- **Free web tools degrade gracefully.** A ~10s wall-clock cap per scrape (tighter than the 20s request timeout) keeps one slow page from stalling a research turn; known bot-walled hosts (LinkedIn, etc.) short-circuit instantly; multi-page reads run up to 4 in parallel; rate-limit/blocked results are non-fatal and fed back.
+- **Long-running (submit→poll) endpoints** that can't finish in 30s (crawls, async deep-research) are refused up front rather than charged-then-aborted, and the agent picks a synchronous alternative.
+- **Cost & side-effect gates** stream inline; declining cancels cleanly with nothing sent.
 
 ---
 
@@ -148,6 +166,7 @@ Deploy: `wrangler deploy` (worker) and `wrangler pages deploy dist --project-nam
 ## What I'd do with more time
 
 - **Tool-selection determinism.** The same prompt can occasionally route to different catalog endpoints; I'd rank/pin endpoints per intent and cache the chosen endpoint per conversation so results are reproducible and costs predictable.
+- **Fleet-wide upstream protection.** A shared, cross-user response cache + rate-limiter + circuit breaker (in KV or a coordinator DO) so identical calls across *different* users coalesce and a single hot/failing Orthogonal endpoint is throttled globally — today the dedupe cache and breaker are per conversation-turn.
 - **Connectors.** The Connectors surface ships with a Gmail card scaffold; I'd finish the OAuth + give the agent a first-class Gmail tool (read/draft/send behind the existing side-effect gate).
 - **Provider-error sanitization + auto-continue** on `max_tokens` so a truncated answer is transparently continued rather than relying solely on a generous ceiling.
 - **Semantic retrieval over history** (embeddings) instead of a pure recency window, so older but relevant turns resurface.
