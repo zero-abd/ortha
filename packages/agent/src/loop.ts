@@ -67,6 +67,28 @@ export interface AgentInput {
 
 const DEFAULT_MAX_TOKENS = 1024;
 const DEFAULT_MAX_ITERATIONS = 8;
+/** How many times we nudge a model that narrates a next tool action without
+ *  emitting the call, before accepting its turn as final. Bounds wasted turns. */
+const MAX_AUTO_CONTINUE = 2;
+
+// The model sometimes ends a turn narrating a next tool action ("I'll search for
+// another tool") as plain text WITHOUT emitting the call — which would otherwise
+// terminate the turn with an incomplete answer. Detect that so the loop can nudge
+// it to actually act. Kept tight (an intent verb tied to a first-person plan) and
+// guarded by CLOSER_RE so ordinary sign-offs ("let me know…") don't trigger it.
+const CONTINUE_INTENT_RE =
+  /\b(?:i'?ll|i will|i'?m going to|i am going to|let me|let'?s|next,?\s*i|now i|i should|i need to)\b[^.?!]*?\b(?:search|look|find|check|use|call|run|fetch|query|retrieve|enrich|scrape|inspect|try|another tool|a different tool|other tool|get_tool_details|run_tool|search_tools)\b/i;
+const CLOSER_RE = /\b(?:let me know|let us know|feel free|happy to help)\b/i;
+
+function looksLikeUnfulfilledIntent(text: string): boolean {
+  const t = text.trim();
+  if (t.length === 0) return false;
+  if (CLOSER_RE.test(t)) return false;
+  return CONTINUE_INTENT_RE.test(t);
+}
+
+const CONTINUE_NUDGE =
+  "Continue now: make the tool call you just described (search_tools / get_tool_details / run_tool), or give your final answer in plain language. Do not reply again with only a description of what you intend to do.";
 
 interface ToolCallRequest {
   readonly id: string;
@@ -92,6 +114,7 @@ export async function* runAgentTurn(deps: AgentDeps, input: AgentInput): AsyncIt
   const messages: LLMMessage[] = [...input.messages];
   let sessionCents = 0;
   let stepCounter = 0;
+  let autoContinues = 0;
   // Side-effect class per endpoint, recorded as the model inspects tools with
   // get_tool_details. run() reads it (gateway-authoritative, not model-asserted) to
   // gate genuine writes behind a confirmation modal.
@@ -142,8 +165,18 @@ export async function* runAgentTurn(deps: AgentDeps, input: AgentInput): AsyncIt
         await deps.onMessage?.(assistantMsg);
       }
 
-      // ── 2. No tool calls → the model answered. We're done. ──
+      // ── 2. No tool calls. Either the model answered, or it narrated a next
+      //       tool action without emitting it — in which case nudge it to act
+      //       rather than ending the turn with an incomplete answer (bounded). ──
       if (pending.length === 0) {
+        if (autoContinues < MAX_AUTO_CONTINUE && looksLikeUnfulfilledIntent(assistantText)) {
+          autoContinues += 1;
+          // Ephemeral nudge: appended for the next model call but intentionally NOT
+          // sent to onMessage, so it never appears in the user-visible transcript.
+          messages.push({ role: "user", content: CONTINUE_NUDGE });
+          await checkpoint(deps, messages, ++stepCounter, sessionCents);
+          continue;
+        }
         await checkpoint(deps, messages, ++stepCounter, sessionCents);
         yield { type: "done", stopReason: streamStopReason === "max_tokens" ? "max_tokens" : "end" };
         return;
@@ -376,12 +409,31 @@ async function* dispatchRun(
   } catch (err) {
     // The call failed: release the hold so we never leak the reservation.
     await deps.budget.refund(reservation).catch(() => undefined);
+    const latencyMs = Date.now() - startedAt;
     if (isOrthaError(err) && err.retryable) {
       // Stub self-heal signal: a richer planner would route to an alternate provider here.
       yield { type: "self_heal", failedProvider: api, altProvider: api };
     }
-    yield* emitError(err);
-    return { kind: "cancelled" };
+    // A single failed tool call must NOT abort the whole turn. Surface it as a
+    // failed step in the trace and feed the error back to the model so it can try
+    // a different tool or answer with what it already has — instead of ending with
+    // an empty/incomplete reply (issue #16).
+    const code = isOrthaError(err) ? err.code : ErrorCode.TOOL_UNKNOWN_STATE;
+    const message = err instanceof Error ? err.message : String(err);
+    yield {
+      type: "tool_result",
+      stepId: stepLabel,
+      requestId: asRequestId(`failed_${stepLabel}`),
+      summary: `failed — ${code}: ${message}`,
+      priceCents: 0,
+      latencyMs,
+      ok: false,
+    };
+    return {
+      kind: "ok",
+      sessionCents,
+      toolContent: `${api} ${path} failed (${code}: ${message}). Do not retry the same call — try a different tool, or answer with what you already have.`,
+    };
   }
 }
 

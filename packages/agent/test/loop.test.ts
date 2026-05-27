@@ -381,7 +381,7 @@ describe("runAgentTurn — permission gate", () => {
 });
 
 describe("runAgentTurn — provider error", () => {
-  it("surfaces an OrthaError as an error event with provider slug", async () => {
+  it("feeds a failed tool call back to the model instead of aborting the turn", async () => {
     const orthogonal = makeMockOrthogonalClient({
       async run() {
         throw new OrthaError(ErrorCode.PROVIDER_DOWN, "apollo is down", {
@@ -390,15 +390,25 @@ describe("runAgentTurn — provider error", () => {
         });
       },
     });
-    const llm = makeTurnScriptedLLM([[RUN_CALL, { type: "done", stopReason: "tool_use" }]]);
+    const llm = makeTurnScriptedLLM([
+      [RUN_CALL, { type: "done", stopReason: "tool_use" }],
+      // After the failed call is fed back, the model recovers with an answer.
+      [{ type: "token", text: "Sorry, I couldn't reach that source." }, { type: "done", stopReason: "end" }],
+    ]);
     const events = await collect(baseDeps({ llm, orthogonal }));
-
-    // A retryable provider failure emits a self_heal stub before the error.
     const types = events.map((e) => e.type);
+
+    // A retryable failure still emits a self_heal stub.
     expect(types).toContain("self_heal");
-    const err = events.find((e) => e.type === "error");
-    expect(err).toMatchObject({ code: ErrorCode.PROVIDER_DOWN, providerSlug: "apollo" });
-    expect(types.indexOf("self_heal")).toBeLessThan(types.indexOf("error"));
+    // The failure surfaces as a failed tool_result (not a turn-ending error event)...
+    const failed = events.find((e) => e.type === "tool_result" && (e as { ok: boolean }).ok === false);
+    expect(failed).toBeTruthy();
+    expect((failed as { summary: string }).summary).toContain("PROVIDER_DOWN");
+    expect(types).not.toContain("error");
+    // ...and the turn continues to a real answer rather than aborting empty.
+    const tokens = events.filter((e) => e.type === "token").map((e) => (e as { text: string }).text).join("");
+    expect(tokens).toContain("couldn't reach");
+    expect(events.at(-1)).toEqual({ type: "done", stopReason: "end" });
   });
 });
 
@@ -415,6 +425,60 @@ describe("runAgentTurn — tool_search", () => {
     const search = events.find((e) => e.type === "tool_search");
     expect(search).toMatchObject({ query: "enrich company", resultCount: 1 });
     expect(events.at(-1)).toEqual({ type: "done", stopReason: "end" });
+  });
+});
+
+describe("runAgentTurn — continue after narrated intent", () => {
+  it("nudges the model to act when it narrates a next tool step without calling it", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const llm = makeTurnScriptedLLM([
+      // turn 1: a result lacked the answer; the model narrates intent, no tool call.
+      [{ type: "token", text: "That didn't include the CEO. I will search for another tool." }, { type: "done", stopReason: "end" }],
+      // turn 2 (after the nudge): it actually searches.
+      [{ type: "tool_call_request", id: "s1", name: "search_tools", args: { query: "company leadership" } }, { type: "done", stopReason: "tool_use" }],
+      // turn 3: it answers.
+      [{ type: "token", text: "Patrick Collison is the CEO." }, { type: "done", stopReason: "end" }],
+    ]);
+    const events = await collect(baseDeps({ llm, onMessage }));
+
+    // It did NOT stop after the narrated-intent turn: a search happened and an answer followed.
+    expect(events.some((e) => e.type === "tool_search")).toBe(true);
+    const tokens = events.filter((e) => e.type === "token").map((e) => (e as { text: string }).text).join("");
+    expect(tokens).toContain("Patrick Collison is the CEO.");
+    expect(events.at(-1)).toEqual({ type: "done", stopReason: "end" });
+
+    // The synthetic nudge is never persisted to the transcript (no user-role onMessage with it).
+    const persistedNudge = onMessage.mock.calls.some(
+      ([m]) => (m as LLMMessage).role === "user" && (m as LLMMessage).content.includes("Continue now"),
+    );
+    expect(persistedNudge).toBe(false);
+  });
+
+  it("stops after the auto-continue cap if the model keeps narrating intent", async () => {
+    const intent: LLMEvent[] = [
+      { type: "token", text: "Let me search for another tool to find it." },
+      { type: "done", stopReason: "end" },
+    ];
+    const llm = makeTurnScriptedLLM([intent, intent, intent, intent, intent]);
+    const events = await collect(baseDeps({ llm }));
+
+    // Initial turn + 2 nudged turns = 3 streamed turns, then it gives up. One done, no loop.
+    expect(events.filter((e) => e.type === "done")).toHaveLength(1);
+    expect(events.some((e) => e.type === "tool_search")).toBe(false);
+    const intentCount = events.filter(
+      (e) => e.type === "token" && (e as { text: string }).text.includes("Let me search"),
+    ).length;
+    expect(intentCount).toBe(3);
+  });
+
+  it("does not nudge on a normal final answer with a closing offer", async () => {
+    const llm = makeTurnScriptedLLM([
+      [{ type: "token", text: "Patrick Collison is the CEO. Let me know if you want recent news." }, { type: "done", stopReason: "end" }],
+    ]);
+    const events = await collect(baseDeps({ llm }));
+    expect(events.filter((e) => e.type === "done")).toHaveLength(1);
+    const tokens = events.filter((e) => e.type === "token").map((e) => (e as { text: string }).text).join("");
+    expect(tokens).toBe("Patrick Collison is the CEO. Let me know if you want recent news.");
   });
 });
 

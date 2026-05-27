@@ -84,7 +84,13 @@ export const SYSTEM_PROMPT = [
   "To act on the real world you must discover tools with search_tools, inspect them with",
   "get_tool_details, then execute them with run_tool. Use expand_result only when a",
   "distilled summary is insufficient. Prefer the cheapest verified endpoint that answers",
-  "the user. Always explain your answer in plain language once you have the data.",
+  "the user.",
+  "Act, don't narrate: if you decide to use a tool, emit that tool call in the same",
+  "response — never reply with only a description of what you are about to do next. If a",
+  "tool's result doesn't fully answer the question, immediately search for and call another",
+  "tool instead of stopping. Keep going until you can answer; end a turn only with either a",
+  "tool call or a complete plain-language answer.",
+  "Always explain your answer in plain language once you have the data.",
 ].join(" ");
 
 // ── Typed argument coercion (LLM args arrive as untyped Record) ──────────────
