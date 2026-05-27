@@ -218,6 +218,13 @@ function toOpenAIMessages(system: string, messages: readonly LLMMessage[]): unkn
           function: { name: tc.name, arguments: JSON.stringify(tc.args) },
         })),
       });
+    } else if (m.role === "user" && m.images && m.images.length > 0) {
+      // Vision: emit a content-parts array so the model sees the image(s).
+      // Works for both OpenAI's and Gemini's OpenAI-compat endpoints.
+      const parts: unknown[] = [];
+      if (m.content) parts.push({ type: "text", text: m.content });
+      for (const url of m.images) parts.push({ type: "image_url", image_url: { url } });
+      out.push({ role: "user", content: parts });
     } else {
       out.push({ role: m.role, content: m.content });
     }

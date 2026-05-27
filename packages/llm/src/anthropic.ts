@@ -172,9 +172,31 @@ function toAnthropicMessages(messages: readonly LLMMessage[]): unknown[] {
       out.push({ role: "assistant", content: blocks });
       continue;
     }
+    if (m.role === "user" && m.images && m.images.length > 0) {
+      // Vision: emit image blocks alongside the text. Data URLs become base64
+      // source blocks; http(s) URLs become url source blocks.
+      const blocks: unknown[] = [];
+      if (m.content) blocks.push({ type: "text", text: m.content });
+      for (const url of m.images) blocks.push(toAnthropicImageBlock(url));
+      out.push({ role: "user", content: blocks });
+      continue;
+    }
     out.push({ role: m.role, content: m.content });
   }
   return out;
+}
+
+/**
+ * Map one image reference to an Anthropic image content block. A data URL is split
+ * into its media type + base64 payload (a base64 source block); any other string is
+ * treated as an http(s) URL (a url source block).
+ */
+function toAnthropicImageBlock(url: string): Record<string, unknown> {
+  const match = /^data:([^;,]+);base64,(.*)$/s.exec(url);
+  if (match) {
+    return { type: "image", source: { type: "base64", media_type: match[1], data: match[2] } };
+  }
+  return { type: "image", source: { type: "url", url } };
 }
 
 function toAnthropicTool(t: ToolSpec): Record<string, unknown> {

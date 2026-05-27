@@ -68,6 +68,8 @@ export function App() {
   const model = settings.model;
   const [running, setRunning] = useState(false);
   const [draft, setDraft] = useState("");
+  // Data URLs for images attached to the next message (vision input).
+  const [attached, setAttached] = useState<string[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [discoverOpen, setDiscoverOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
@@ -229,13 +231,18 @@ export function App() {
   }, []);
 
   const send = useCallback(
-    async (text: string) => {
-      if (!text.trim() || running) return;
+    async (text: string, imageArg?: string[]) => {
+      // Images default to whatever is attached in the composer; example cards and
+      // commands call send(text) with no images and behave exactly as before.
+      const images = imageArg ?? attached;
+      // Allow an image-only message (no text) so a user can just ask "what's this?".
+      if ((!text.trim() && images.length === 0) || running) return;
       setDraft("");
+      setAttached([]);
       stepApi.current = {};
       setMessages((prev) => [
         ...prev,
-        { id: `u_${Date.now()}`, role: "user", content: text, steps: [], streaming: false },
+        { id: `u_${Date.now()}`, role: "user", content: text, steps: [], streaming: false, ...(images.length > 0 ? { images } : {}) },
         { id: `a_${Date.now()}`, role: "assistant", content: "", steps: [], streaming: true },
       ]);
       setRunning(true);
@@ -252,7 +259,7 @@ export function App() {
           startCents: cost.sessionCents,
           capCents: cost.capCents,
           conversationId: activeId,
-        });
+        }, images);
         finishAgentRun(runId);
       } catch (err) {
         const message = err instanceof Error ? err.message : "Couldn't reach Ortha. Check your connection and try again.";
@@ -263,7 +270,7 @@ export function App() {
         refreshConversations();
       }
     },
-    [running, onEvent, requestPermission, cost.sessionCents, cost.capCents, activeId, refreshConversations, patchActive, startAgentRun, pushAgentEvent, finishAgentRun],
+    [running, attached, onEvent, requestPermission, cost.sessionCents, cost.capCents, activeId, refreshConversations, patchActive, startAgentRun, pushAgentEvent, finishAgentRun],
   );
 
   // Run one batch row as an isolated turn: a fresh conversation id (so rows run
@@ -580,7 +587,7 @@ export function App() {
               <h1 className="welcome__title">Welcome to Ortha</h1>
               <p className="welcome__sub">Describe what you need — Ortha discovers the right tools and runs them.</p>
               <div style={{ width: "100%", maxWidth: 720 }}>
-                <AskBox value={draft} onChange={setDraft} onSend={() => send(draft)} onCommand={onCommand} disabled={running} autoFocus />
+                <AskBox value={draft} onChange={setDraft} onSend={() => send(draft)} onCommand={onCommand} disabled={running} autoFocus attached={attached} onAttach={setAttached} />
               </div>
               <div className="cats">
                 {EXAMPLE_CATS.map((c) => (
@@ -606,7 +613,7 @@ export function App() {
               </div>
             </div>
             <div className="composer">
-              <AskBox value={draft} onChange={setDraft} onSend={() => send(draft)} onCommand={onCommand} disabled={running} />
+              <AskBox value={draft} onChange={setDraft} onSend={() => send(draft)} onCommand={onCommand} disabled={running} attached={attached} onAttach={setAttached} />
             </div>
           </div>
         )}
@@ -670,7 +677,16 @@ function Message({ m, onOpenRaw, rawStore, pending, resolvedPerms, onDecide, cap
     return (
       <div className="msg msg--user">
         <div className="msg__role">You</div>
-        <div className="msg__body">{m.content}</div>
+        <div className="msg__body">
+          {m.images && m.images.length > 0 && (
+            <div className="msg__images" style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: m.content ? 8 : 0 }}>
+              {m.images.map((src, i) => (
+                <img key={i} src={src} alt="attachment" style={{ maxWidth: 220, maxHeight: 220, borderRadius: 8, objectFit: "cover" }} />
+              ))}
+            </div>
+          )}
+          {m.content}
+        </div>
       </div>
     );
   }
@@ -706,6 +722,19 @@ function Message({ m, onOpenRaw, rawStore, pending, resolvedPerms, onDecide, cap
   );
 }
 
+// Vision attach limits (mirror the server-side gate in conversation-do.ts).
+const MAX_IMAGES = 2;
+const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+
+function readImageDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
+    reader.onerror = () => reject(reader.error ?? new Error("read failed"));
+    reader.readAsDataURL(file);
+  });
+}
+
 function AskBox({
   value,
   onChange,
@@ -713,6 +742,8 @@ function AskBox({
   onCommand,
   disabled,
   autoFocus,
+  attached = [],
+  onAttach,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -720,12 +751,15 @@ function AskBox({
   onCommand?: (cmd: Command, arg: string) => void;
   disabled: boolean;
   autoFocus?: boolean;
+  attached?: string[];
+  onAttach?: (images: string[]) => void;
 }) {
   // The slash menu is shown when the draft starts with "/" and isn't yet a
   // full "command + space + arg" line being typed past the menu. We keep it
   // open while the user is still on the command word or just past it.
   const slashOpen = onCommand != null && value.startsWith("/");
   const navRef = useRef<SlashNav | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
 
   const runActive = () => {
     const nav = navRef.current;
@@ -735,6 +769,27 @@ function AskBox({
     }
     return false;
   };
+
+  // Read picked image files to data URLs, skipping anything over the size cap, and
+  // append up to MAX_IMAGES total. Resets the input so re-picking the same file works.
+  const onPickFiles = async (files: FileList | null) => {
+    if (!files || !onAttach) return;
+    const room = MAX_IMAGES - attached.length;
+    if (room <= 0) return;
+    const picked: string[] = [];
+    for (const file of Array.from(files).slice(0, room)) {
+      if (!file.type.startsWith("image/") || file.size > MAX_IMAGE_BYTES) continue;
+      try {
+        const url = await readImageDataUrl(file);
+        if (url) picked.push(url);
+      } catch {
+        /* skip unreadable file */
+      }
+    }
+    if (picked.length > 0) onAttach([...attached, ...picked].slice(0, MAX_IMAGES));
+  };
+
+  const removeImage = (idx: number) => onAttach?.(attached.filter((_, i) => i !== idx));
 
   return (
     <div className="ask-wrap">
@@ -747,7 +802,51 @@ function AskBox({
           onChoose={(cmd) => onCommand?.(cmd, value.replace(/^\/\S*\s*/, ""))}
         />
       )}
+      {onAttach && attached.length > 0 && (
+        <div className="ask__chips" style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: "8px 4px 0" }}>
+          {attached.map((src, i) => (
+            <span key={i} style={{ position: "relative", display: "inline-block" }}>
+              <img src={src} alt="attachment" style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 8, display: "block" }} />
+              <button
+                type="button"
+                aria-label="Remove image"
+                onClick={() => removeImage(i)}
+                style={{ position: "absolute", top: -6, right: -6, width: 18, height: 18, borderRadius: "50%", border: "none", background: "rgba(0,0,0,0.7)", color: "#fff", cursor: "pointer", lineHeight: "16px", fontSize: 12, padding: 0 }}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       <div className="ask">
+        {onAttach && (
+          <>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*"
+              multiple
+              style={{ display: "none" }}
+              onChange={(e) => {
+                void onPickFiles(e.target.files);
+                e.target.value = "";
+              }}
+            />
+            <button
+              type="button"
+              className="ask__attach iconbtn"
+              aria-label="Attach image"
+              title="Attach image"
+              disabled={disabled || attached.length >= MAX_IMAGES}
+              onClick={() => fileRef.current?.click()}
+            >
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+              </svg>
+            </button>
+          </>
+        )}
         <textarea
           className="ask__input"
           value={value}

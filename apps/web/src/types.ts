@@ -32,6 +32,8 @@ export interface ChatMessage {
   steps: TraceStep[];
   streaming: boolean;
   error?: { code: string; message: string };
+  /** Data URLs for images attached to a user message (vision input). */
+  images?: string[];
 }
 
 export interface CostState {

@@ -13,6 +13,12 @@ export interface ToolSpec {
 export interface LLMMessage {
   readonly role: "system" | "user" | "assistant" | "tool";
   readonly content: string;
+  /**
+   * Set on a role === "user" message to attach images for a vision-capable model.
+   * Each entry is either a data URL (`data:image/...;base64,...`) or an http(s) URL.
+   * Optional + ignored by adapters when absent, so non-vision turns are unchanged.
+   */
+  readonly images?: readonly string[];
   /** Set when role === "tool": which tool_call_request this result answers. */
   readonly toolCallId?: string;
   /** Set when role === "tool": the tool's name. Required when replaying to providers

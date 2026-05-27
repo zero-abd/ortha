@@ -123,7 +123,7 @@ export class ConversationDO implements DurableObject {
   }
 
   private async onMessage(ws: WebSocket, ev: MessageEvent): Promise<void> {
-    let msg: { type?: string; text?: string; response?: PermissionResponse };
+    let msg: { type?: string; text?: string; images?: unknown; response?: PermissionResponse };
     try {
       msg = JSON.parse(typeof ev.data === "string" ? ev.data : "{}");
     } catch {
@@ -139,9 +139,10 @@ export class ConversationDO implements DurableObject {
       ws.send(JSON.stringify({ type: "error", code: "BAD_REQUEST", message: "a turn is already running" }));
       return;
     }
+    const images = sanitizeImages(msg.images);
     this.running = true;
     try {
-      await this.runTurn(ws, msg.text);
+      await this.runTurn(ws, msg.text, images);
     } finally {
       this.running = false;
     }
@@ -202,7 +203,7 @@ export class ConversationDO implements DurableObject {
     return DEFAULT_SETTINGS.monthlyCapCents;
   }
 
-  private async runTurn(ws: WebSocket, text: string): Promise<void> {
+  private async runTurn(ws: WebSocket, text: string, images: readonly string[] = []): Promise<void> {
     await this.init();
     await this.store.appendMessage({ conversationId: this.conversationId, role: "user", content: text });
     await this.registerConversation(text.slice(0, 60)).catch(() => {});
@@ -219,6 +220,17 @@ export class ConversationDO implements DurableObject {
       ...(m.toolName ? { toolName: m.toolName } : {}),
     }));
     const messages: LLMMessage[] = sanitizeTranscript(rehydrated);
+    // Attach this turn's images to its (last) user message so a vision-capable model
+    // can analyze them. Images aren't persisted in the transcript store (they'd bloat
+    // it), so they live only on the in-memory message for this turn.
+    if (images.length > 0) {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i]!.role === "user") {
+          messages[i] = { ...messages[i]!, images };
+          break;
+        }
+      }
+    }
 
     // Durable spend store: workspace monthly spend in D1, session spend in this DO's
     // SQLite. Seeded with the workspace's monthly cap so `remaining()` is correct.
@@ -297,6 +309,31 @@ export class ConversationDO implements DurableObject {
  * assistant tool_call, or an assistant tool_call with no result. Both are rejected
  * by OpenAI and Anthropic. We keep only matched assistant↔tool pairs.
  */
+/** Per-image data-URL byte cap (~4MB of base64). Bounds DO memory + provider payload. */
+const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+/** At most this many images per message. */
+const MAX_IMAGES = 2;
+
+/**
+ * Validate + bound the optional `images` array from an incoming user_message.
+ * Accepts only data URLs (`data:image/...;base64,...`) or http(s) URLs, caps the
+ * count, and drops oversized data URLs. A non-array (or absent) value yields [].
+ */
+function sanitizeImages(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const v of raw) {
+    if (typeof v !== "string") continue;
+    const isData = /^data:image\/[a-zA-Z0-9.+-]+;base64,/.test(v);
+    const isHttp = /^https?:\/\//.test(v);
+    if (!isData && !isHttp) continue;
+    if (isData && v.length > MAX_IMAGE_BYTES) continue;
+    out.push(v);
+    if (out.length >= MAX_IMAGES) break;
+  }
+  return out;
+}
+
 function sanitizeTranscript(msgs: readonly LLMMessage[]): LLMMessage[] {
   const firstUser = msgs.findIndex((m) => m.role === "user");
   const window = firstUser > 0 ? msgs.slice(firstUser) : msgs;
