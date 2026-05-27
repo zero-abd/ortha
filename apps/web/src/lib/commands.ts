@@ -27,6 +27,8 @@ export interface CommandContext {
   openSettings: () => void;
   /** Clear the current chat without creating a new conversation id. */
   clearChat: () => void;
+  /** Open the batch runner (run a skill across many rows). */
+  openBatch: () => void;
 }
 
 export type CommandKind = "prompt" | "action";
@@ -161,6 +163,13 @@ export const COMMANDS: Command[] = [
     description: "Clear the current chat",
     kind: "action",
     run: (ctx) => ctx.clearChat(),
+  },
+  {
+    id: "batch",
+    title: "/batch",
+    description: "Run a skill across many rows",
+    kind: "action",
+    run: (ctx) => ctx.openBatch(),
   },
 ];
 

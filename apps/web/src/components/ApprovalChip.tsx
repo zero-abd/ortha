@@ -7,7 +7,7 @@ interface Props {
   sessionCents: number;
   capCents: number;
   /** True when the price is dynamic: estCents is a floor, the real charge may be higher. */
-  dynamic?: boolean;
+  dynamic?: boolean | undefined;
   resolved?: "approved" | "skipped";
   onDecide: (r: PermissionResponse) => void;
 }
