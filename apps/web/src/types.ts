@@ -32,6 +32,8 @@ export interface ChatMessage {
   steps: TraceStep[];
   streaming: boolean;
   error?: { code: string; message: string };
+  /** Names of text files attached to a user message (shown as chips). */
+  attachmentNames?: string[];
 }
 
 export interface CostState {
