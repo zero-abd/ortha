@@ -377,8 +377,21 @@ async function* dispatchSearch(
   call: ToolCallRequest,
   sessionCents: number,
 ): AsyncGenerator<TraceEvent, DispatchResult> {
-  const query = asString(call.args["query"]) ?? "";
-  const results = await deps.orthogonal.search({ prompt: query });
+  const query = asString(call.args["query"])?.trim() ?? "";
+  // Empty query would 400 the catalog ("Search prompt is required"); feed that back
+  // instead of letting it abort the whole turn (mirrors web_search's guard).
+  if (!query) {
+    return { kind: "ok", sessionCents, toolContent: "search_tools requires a non-empty 'query' describing the capability you need (e.g. \"find work email by name and company\")." };
+  }
+  let results;
+  try {
+    results = await deps.orthogonal.search({ prompt: query });
+  } catch (err) {
+    // A catalog hiccup (400/timeout) must NOT kill the turn — surface it so the model
+    // can rephrase, try the web tools, or answer with what it already has.
+    const message = err instanceof Error ? err.message : String(err);
+    return { kind: "ok", sessionCents, toolContent: `search_tools failed for "${query}": ${message}. Try a different phrasing, the web tools, or answer with what you already have.` };
+  }
   // Surface the matched endpoints (ranked, recommended first) in the trace so the chat
   // can show WHICH tools were found, not just the count. Capped to keep the event small.
   const tools = rankEndpoints(results).slice(0, 12).map(({ api, ep }) => `${api.slug} ${ep.path}`);
@@ -397,7 +410,13 @@ async function* dispatchDetails(
   if (!api || !path) {
     return { kind: "ok", sessionCents, toolContent: "get_tool_details requires both 'api' and 'path'." };
   }
-  const details = await deps.orthogonal.getDetails(api, path);
+  let details;
+  try {
+    details = await deps.orthogonal.getDetails(api, path);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { kind: "ok", sessionCents, toolContent: `get_tool_details failed for ${api} ${path}: ${message}. Pick a different endpoint from your search_tools results.` };
+  }
   // Record the authoritative gate info so dispatchRun can gate a write or refuse a long-op.
   sideEffects.set(`${api} ${path}`, { sideEffect: details.sideEffect, longRunning: details.longRunning });
   return { kind: "ok", sessionCents, toolContent: JSON.stringify(details) };

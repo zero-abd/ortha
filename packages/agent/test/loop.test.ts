@@ -429,6 +429,29 @@ describe("runAgentTurn — tool_search", () => {
     expect(search).toMatchObject({ query: "enrich company", resultCount: 1 });
     expect(events.at(-1)).toEqual({ type: "done", stopReason: "end" });
   });
+
+  it("guards an empty search_tools query instead of aborting the turn", async () => {
+    // A blank query would 400 the catalog ("Search prompt is required"). The guard must
+    // feed that back and let the turn continue — not propagate to a turn-killing error.
+    let searchCalls = 0;
+    const orthogonal = makeMockOrthogonalClient({
+      async search() {
+        searchCalls++;
+        return [];
+      },
+    });
+    const { contents, onMessage } = captureToolContent();
+    const llm = makeTurnScriptedLLM([
+      [{ type: "tool_call_request", id: "s0", name: "search_tools", args: { query: "" } }, { type: "done", stopReason: "tool_use" }],
+      [{ type: "token", text: "Answering with what I have." }, { type: "done", stopReason: "end" }],
+    ]);
+    const events = await collect(baseDeps({ llm, orthogonal, onMessage }));
+    expect(searchCalls).toBe(0); // never hit the catalog with an empty query
+    expect(events.some((e) => e.type === "tool_search")).toBe(false);
+    expect(events.some((e) => e.type === "error")).toBe(false); // turn did NOT abort
+    expect(contents.some((c) => c.includes("non-empty"))).toBe(true);
+    expect(events.at(-1)).toEqual({ type: "done", stopReason: "end" });
+  });
 });
 
 describe("runAgentTurn — continue after narrated intent", () => {
