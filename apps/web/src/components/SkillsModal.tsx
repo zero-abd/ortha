@@ -141,10 +141,15 @@ export function SkillsModal({ open, onClose, onRun, onSkillsChanged, initialRunS
 
   const title =
     view.mode === "create" ? "New skill" : view.mode === "run" ? `Run · ${view.skill.name}` : "Skills";
+  // Names already in "Your skills" — so a public card can show "Added" instead of "Add".
+  const installedNames = new Set(skills.map((s) => s.name));
+  // Widen the modal on the public tab so its catalog lays out as a multi-column grid
+  // (easier to scan/search than one-per-row).
+  const wide = view.mode === "list" && tab === "public";
 
   return (
     <div className="settings-scrim" onClick={onClose}>
-      <div className="settings" role="dialog" aria-modal="true" aria-label="Skills" onClick={(e) => e.stopPropagation()}>
+      <div className={`settings${wide ? " settings--lg" : ""}`} role="dialog" aria-modal="true" aria-label="Skills" onClick={(e) => e.stopPropagation()}>
         <div className="settings__head">
           <span className="settings__title">{title}</span>
           <button className="iconbtn" onClick={onClose} aria-label="Close Skills">✕</button>
@@ -188,7 +193,7 @@ export function SkillsModal({ open, onClose, onRun, onSkillsChanged, initialRunS
           )}
 
           {view.mode === "list" && tab === "public" && (
-            <PublicSkillList skills={publicSkills} onUse={usePublic} onInstall={installPublic} addedId={added} busy={busy} />
+            <PublicSkillList skills={publicSkills} onUse={usePublic} onInstall={installPublic} addedId={added} busy={busy} installedNames={installedNames} />
           )}
 
           {view.mode === "create" && (
@@ -292,12 +297,14 @@ function PublicSkillList({
   onInstall,
   addedId,
   busy,
+  installedNames,
 }: {
   skills: PublicSkill[] | null;
   onUse: (s: PublicSkill) => void;
   onInstall: (s: PublicSkill) => void;
   addedId: string | null;
   busy: boolean;
+  installedNames: Set<string>;
 }) {
   const [query, setQuery] = useState("");
 
@@ -336,9 +343,9 @@ function PublicSkillList({
       {featured.length > 0 && !query.trim() && (
         <section className="skill__pubgroup">
           <span className="settings__label">Featured</span>
-          <div className="skill__list">
+          <div className="skill__pubgrid">
             {featured.map((s) => (
-              <PublicSkillCard key={s.id} skill={s} onUse={onUse} onInstall={onInstall} added={addedId === s.id} busy={busy} />
+              <PublicSkillCard key={s.id} skill={s} onUse={onUse} onInstall={onInstall} added={addedId === s.id} busy={busy} installed={installedNames.has(s.name)} />
             ))}
           </div>
         </section>
@@ -348,9 +355,9 @@ function PublicSkillList({
         {rest.length === 0 ? (
           <div className="skill__empty">No public skills match your search.</div>
         ) : (
-          <div className="skill__list">
+          <div className="skill__pubgrid">
             {rest.map((s) => (
-              <PublicSkillCard key={s.id} skill={s} onUse={onUse} onInstall={onInstall} added={addedId === s.id} busy={busy} />
+              <PublicSkillCard key={s.id} skill={s} onUse={onUse} onInstall={onInstall} added={addedId === s.id} busy={busy} installed={installedNames.has(s.name)} />
             ))}
           </div>
         )}
@@ -365,15 +372,18 @@ function PublicSkillCard({
   onInstall,
   added,
   busy,
+  installed,
 }: {
   skill: PublicSkill;
   onUse: (s: PublicSkill) => void;
   onInstall: (s: PublicSkill) => void;
   added: boolean;
   busy: boolean;
+  installed: boolean;
 }) {
+  const isAdded = added || installed; // already in "Your skills" (or just added)
   return (
-    <article className="skillcard">
+    <article className="skillcard skillcard--pub">
       <div className="skillcard__main">
         <span className="skillcard__name">
           {skill.name}
@@ -386,21 +396,20 @@ function PublicSkillCard({
           <span className="skill__installs" title="Installs">
             {skill.installCount.toLocaleString()} {skill.installCount === 1 ? "install" : "installs"}
           </span>
-          {skill.tags.slice(0, 3).map((t) => (
+          {skill.tags.slice(0, 2).map((t) => (
             <span key={t} className="skill__tag">{t}</span>
           ))}
         </div>
       </div>
       <div className="skillcard__actions">
         <button className="btn-sm btn-sm--accent" onClick={() => onUse(skill)}>Use</button>
-        <button
-          className="btn-sm"
-          disabled={busy || added}
-          onClick={() => onInstall(skill)}
-          title="Add to Your skills (then run it with /)"
-        >
-          {added ? "Added ✓" : "Add to my skills"}
-        </button>
+        {isAdded ? (
+          <button className="btn-sm" disabled title="Already in Your skills">✓ Added</button>
+        ) : (
+          <button className="btn-sm" disabled={busy} onClick={() => onInstall(skill)} title="Add to Your skills (then run it with /)">
+            Add
+          </button>
+        )}
       </div>
     </article>
   );

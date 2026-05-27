@@ -15,20 +15,20 @@ interface State {
  * left off. Error boundaries must be class components; hooks can't catch render errors.
  */
 export class ErrorBoundary extends Component<Props, State> {
-  state: State = { error: null };
+  override state: State = { error: null };
 
   static getDerivedStateFromError(error: Error): State {
     return { error };
   }
 
-  componentDidCatch(error: Error, info: ErrorInfo): void {
+  override componentDidCatch(error: Error, info: ErrorInfo): void {
     // No telemetry pipeline here; surface it in the console for debugging.
     console.error("Ortha UI error boundary caught:", error, info.componentStack);
   }
 
   private readonly reset = (): void => this.setState({ error: null });
 
-  render(): ReactNode {
+  override render(): ReactNode {
     const { error } = this.state;
     if (!error) return this.props.children;
     return (
