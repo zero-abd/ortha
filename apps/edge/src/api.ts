@@ -18,6 +18,70 @@ export interface Skill {
 const MAX_TEMPLATE = 2000;
 const MAX_NAME = 120;
 
+/** Cap on the SKILL.md body we surface for a public catalog skill — they can be large. */
+const MAX_PUBLIC_SKILL_CONTENT = 6000;
+/** KV cache key + TTL for the transformed public skills catalog. */
+const PUBLIC_SKILLS_CACHE_KEY = "public-skills:v1";
+const PUBLIC_SKILLS_TTL_SECONDS = 3600;
+/** Public, no-auth Orthogonal skills catalog (discover mode). */
+const PUBLIC_SKILLS_URL = "https://api.orthogonal.com/api/skills?discover=true";
+
+/** A trimmed public-catalog skill, as returned by `GET /api/skills/public`. */
+export interface PublicSkill {
+  id: string;
+  name: string;
+  slug: string;
+  description: string;
+  highlighted: boolean;
+  installCount: number;
+  verified: boolean;
+  tags: string[];
+  content: string;
+}
+
+/** One skill as the upstream discover catalog returns it (only the fields we read). */
+interface RawCatalogSkill {
+  id?: unknown;
+  name?: unknown;
+  slug?: unknown;
+  description?: unknown;
+  highlighted?: unknown;
+  installCount?: unknown;
+  verified?: unknown;
+  tags?: unknown;
+  files?: unknown;
+}
+
+/**
+ * Transform the upstream discover catalog into our trimmed `PublicSkill[]`:
+ *   - `content` = the `SKILL.md` file's body, capped at MAX_PUBLIC_SKILL_CONTENT chars.
+ *   - sorted featured (`highlighted`) first, then by `installCount` desc.
+ * Pure (no I/O) so it's unit-testable. Tolerates missing/oddly-typed fields.
+ */
+export function transformPublicSkills(raw: unknown): PublicSkill[] {
+  const skills = (raw as { skills?: unknown } | null)?.skills;
+  if (!Array.isArray(skills)) return [];
+  const mapped: PublicSkill[] = skills.map((s) => {
+    const sk = (s ?? {}) as RawCatalogSkill;
+    const files = Array.isArray(sk.files) ? (sk.files as { filePath?: unknown; content?: unknown }[]) : [];
+    const skillMd = files.find((f) => f?.filePath === "SKILL.md");
+    const content = typeof skillMd?.content === "string" ? skillMd.content.slice(0, MAX_PUBLIC_SKILL_CONTENT) : "";
+    return {
+      id: typeof sk.id === "string" ? sk.id : "",
+      name: typeof sk.name === "string" ? sk.name : "",
+      slug: typeof sk.slug === "string" ? sk.slug : "",
+      description: typeof sk.description === "string" ? sk.description : "",
+      highlighted: sk.highlighted === true,
+      installCount: typeof sk.installCount === "number" ? sk.installCount : 0,
+      verified: sk.verified === true,
+      tags: Array.isArray(sk.tags) ? sk.tags.filter((t): t is string => typeof t === "string") : [],
+      content,
+    };
+  });
+  // Featured first, then most-installed first.
+  return mapped.sort((a, b) => Number(b.highlighted) - Number(a.highlighted) || b.installCount - a.installCount);
+}
+
 /** Read the workspace's skills from KV, tolerating a missing/corrupt blob. */
 async function readSkills(env: Env, workspaceId: string): Promise<Skill[]> {
   const raw = await env.KV.get(`skills:${workspaceId}`);
@@ -62,7 +126,62 @@ export async function handleApi(request: Request, env: Env, url: URL, session: S
   const skillMatch = url.pathname.match(/^\/api\/workspace\/skills(?:\/([^/]+))?$/);
   const isSettings = url.pathname === "/api/settings";
   const isUsage = url.pathname === "/api/workspace/usage";
-  if (!keyMatch && !skillMatch && !isSettings && !isUsage) return null;
+  const isPublicSkills = url.pathname === "/api/skills/public";
+  const isConnectors = url.pathname === "/api/connectors";
+  const isGmailConnect = url.pathname === "/api/connectors/gmail/connect";
+  if (!keyMatch && !skillMatch && !isSettings && !isUsage && !isPublicSkills && !isConnectors && !isGmailConnect) return null;
+
+  // ── Public skills catalog — proxied from Orthogonal (public, no-auth upstream) so
+  // the web app avoids CORS. Cached in KV for an hour; serves stale on upstream failure. ──
+  if (isPublicSkills) {
+    if (request.method !== "GET") return json({ error: "method not allowed" }, 405);
+    const cached = await env.KV.get(PUBLIC_SKILLS_CACHE_KEY);
+    if (cached) {
+      try {
+        return json({ skills: JSON.parse(cached) as PublicSkill[] });
+      } catch {
+        /* corrupt cache → fall through and refetch */
+      }
+    }
+    try {
+      const upstream = await fetch(PUBLIC_SKILLS_URL, { headers: { accept: "application/json" } });
+      if (!upstream.ok) throw new Error(`upstream ${upstream.status}`);
+      const skills = transformPublicSkills(await upstream.json());
+      await env.KV.put(PUBLIC_SKILLS_CACHE_KEY, JSON.stringify(skills), { expirationTtl: PUBLIC_SKILLS_TTL_SECONDS });
+      return json({ skills });
+    } catch (err) {
+      // No fresh data: serve stale cache if any (best effort), else an empty list so the UI still loads.
+      console.error("public skills fetch failed", err);
+      const stale = await env.KV.get(PUBLIC_SKILLS_CACHE_KEY);
+      if (stale) {
+        try {
+          return json({ skills: JSON.parse(stale) as PublicSkill[] });
+        } catch {
+          /* fall through to empty */
+        }
+      }
+      return json({ skills: [] });
+    }
+  }
+
+  // ── Connectors — static scaffold; no real integration yet. ──
+  if (isConnectors) {
+    if (request.method !== "GET") return json({ error: "method not allowed" }, 405);
+    return json({
+      connectors: [
+        {
+          id: "gmail",
+          name: "Gmail",
+          description: "Connect your Gmail to let Ortha read and act on email.",
+          status: "coming_soon",
+        },
+      ],
+    });
+  }
+  if (isGmailConnect) {
+    if (request.method !== "POST") return json({ error: "method not allowed" }, 405);
+    return json({ status: "coming_soon", message: "Gmail connector is not available yet." });
+  }
 
   // ── BYOK keys — device-local, encrypted at rest, never synced ──
   if (keyMatch) {
