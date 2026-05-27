@@ -161,6 +161,13 @@ input, textarea, select { font: inherit; color: inherit; }
 .ask__send:hover { opacity: 0.9; }
 .ask__send:disabled { opacity: 0.4; cursor: default; }
 
+/* Deep-research toggle: a compact pill beside the send button. Off = quiet
+   hairline; on = filled accent so the active state reads clearly. */
+.research-toggle { display: inline-flex; align-items: center; gap: 6px; flex: none; height: 34px; padding: 0 12px; border: 1px solid var(--hairline-strong); border-radius: var(--radius-pill); background: var(--surface); color: var(--muted); font-size: 12.5px; font-weight: 500; white-space: nowrap; transition: background 0.12s, border-color 0.12s, color 0.12s; }
+.research-toggle:hover { background: var(--hover); border-color: var(--ink-soft); color: var(--ink); }
+.research-toggle--on { background: var(--accent); border-color: var(--accent); color: #ffffff; }
+.research-toggle--on:hover { background: var(--accent); border-color: var(--accent); color: #ffffff; opacity: 0.92; }
+
 /* ── Agent-trace block ─────────────────────────────────────────────────── */
 .trace { border: 1px solid var(--hairline); border-radius: var(--radius-sm); background: var(--surface); margin: 4px 0; overflow: hidden; }
 .trace__line { display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 12px; text-align: left; font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); }

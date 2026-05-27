@@ -24,6 +24,7 @@ import { API } from "./lib/config.ts";
 import { deleteConversation, getSettings, listConversations, putSettings, renameConversation, type ApiSettings, type Conversation } from "./lib/api.ts";
 import { PROVIDERS, defaultModelOf, providerOfModel } from "./lib/providers.ts";
 import { runCommand, type Command, type CommandContext } from "./lib/commands.ts";
+import { wrapResearch } from "./lib/research.ts";
 import type { AgentRun, ChatMessage, CostState, RawArtifact, TraceStep } from "./types.ts";
 import { AgentsPanel } from "./components/AgentsPanel.tsx";
 import { applyTraceEventToRun, finishRun, newAgentRun } from "./lib/agentRuns.ts";
@@ -69,6 +70,9 @@ export function App() {
   const model = settings.model;
   const [running, setRunning] = useState(false);
   const [draft, setDraft] = useState("");
+  // Deep-research mode: when on, the turn gets a research-directive-wrapped
+  // prompt while the chat bubble still shows the user's original text.
+  const [deepResearch, setDeepResearch] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [discoverOpen, setDiscoverOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
@@ -234,6 +238,9 @@ export function App() {
       if (!text.trim() || running) return;
       setDraft("");
       stepApi.current = {};
+      // The chat bubble shows the user's original text; the model receives the
+      // research-directive-wrapped prompt when deep-research mode is on.
+      const turnText = deepResearch ? wrapResearch(text) : text;
       setMessages((prev) => [
         ...prev,
         { id: `u_${Date.now()}`, role: "user", content: text, steps: [], streaming: false },
@@ -242,7 +249,7 @@ export function App() {
       setRunning(true);
       const runId = startAgentRun(text, "chat");
       try {
-        await runTurn(text, {
+        await runTurn(turnText, {
           onEvent: (e) => {
             if (e.type === "tool_call_started") stepApi.current[e.stepId] = e.api;
             onEvent(e);
@@ -264,7 +271,7 @@ export function App() {
         refreshConversations();
       }
     },
-    [running, onEvent, requestPermission, cost.sessionCents, cost.capCents, activeId, refreshConversations, patchActive, startAgentRun, pushAgentEvent, finishAgentRun],
+    [running, deepResearch, onEvent, requestPermission, cost.sessionCents, cost.capCents, activeId, refreshConversations, patchActive, startAgentRun, pushAgentEvent, finishAgentRun],
   );
 
   // Run one batch row as an isolated turn: a fresh conversation id (so rows run
@@ -581,7 +588,7 @@ export function App() {
               <h1 className="welcome__title">Welcome to Ortha</h1>
               <p className="welcome__sub">Describe what you need — Ortha discovers the right tools and runs them.</p>
               <div style={{ width: "100%", maxWidth: 720 }}>
-                <AskBox value={draft} onChange={setDraft} onSend={() => send(draft)} onCommand={onCommand} disabled={running} autoFocus />
+                <AskBox value={draft} onChange={setDraft} onSend={() => send(draft)} onCommand={onCommand} disabled={running} deepResearch={deepResearch} onToggleDeepResearch={() => setDeepResearch((v) => !v)} autoFocus />
               </div>
               <div className="cats">
                 {EXAMPLE_CATS.map((c) => (
@@ -607,7 +614,7 @@ export function App() {
               </div>
             </div>
             <div className="composer">
-              <AskBox value={draft} onChange={setDraft} onSend={() => send(draft)} onCommand={onCommand} disabled={running} />
+              <AskBox value={draft} onChange={setDraft} onSend={() => send(draft)} onCommand={onCommand} disabled={running} deepResearch={deepResearch} onToggleDeepResearch={() => setDeepResearch((v) => !v)} />
             </div>
           </div>
         )}
@@ -714,6 +721,8 @@ function AskBox({
   onSend,
   onCommand,
   disabled,
+  deepResearch,
+  onToggleDeepResearch,
   autoFocus,
 }: {
   value: string;
@@ -721,6 +730,8 @@ function AskBox({
   onSend: () => void;
   onCommand?: (cmd: Command, arg: string) => void;
   disabled: boolean;
+  deepResearch?: boolean;
+  onToggleDeepResearch?: () => void;
   autoFocus?: boolean;
 }) {
   // The slash menu is shown when the draft starts with "/" and isn't yet a
@@ -782,6 +793,21 @@ function AskBox({
             }
           }}
         />
+        {onToggleDeepResearch && (
+          <button
+            type="button"
+            className={`research-toggle${deepResearch ? " research-toggle--on" : ""}`}
+            onClick={onToggleDeepResearch}
+            aria-pressed={!!deepResearch}
+            title={deepResearch ? "Deep research is on — Ortha will research across multiple sources" : "Deep research off"}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="11" cy="11" r="7" />
+              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+            <span>Deep research</span>
+          </button>
+        )}
         <button className="ask__send" onClick={onSend} disabled={disabled} aria-label="Send">↑</button>
       </div>
     </div>
