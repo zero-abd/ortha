@@ -17,7 +17,14 @@ const ErrorCodeEnum = z.enum([
 
 export const TraceEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("token"), text: z.string() }),
-  z.object({ type: z.literal("tool_search"), query: z.string(), resultCount: z.number().int() }),
+  z.object({
+    type: z.literal("tool_search"),
+    query: z.string(),
+    resultCount: z.number().int(),
+    // The matched endpoints ("slug path"), ranked (recommended first) — so the trace can
+    // show WHICH tools were found, not just how many. Capped by the loop.
+    tools: z.array(z.string()).optional(),
+  }),
   z.object({
     type: z.literal("tool_call_started"),
     stepId: z.string(),

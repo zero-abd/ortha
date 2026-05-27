@@ -51,6 +51,16 @@ export function TraceBlock({ step, onOpenRaw, raw }: Props) {
       {open && (
         <div className="trace__detail">
           {step.summary && <div className="trace__result-row">{step.summary}</div>}
+          {step.tools && step.tools.length > 0 && (
+            <ul className="trace__tools">
+              {step.tools.map((t, i) => (
+                <li key={t} className="mono">
+                  {t}
+                  {i === 0 && <span className="trace__tool-tag"> · recommended</span>}
+                </li>
+              ))}
+            </ul>
+          )}
           {showCard && <ResultCard raw={raw} title={step.api ?? step.path} />}
           {step.requestId && step.status === "success" && (
             <button className="linkbtn" onClick={() => onOpenRaw(step.requestId!)}>

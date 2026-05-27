@@ -19,6 +19,8 @@ export interface TraceStep {
   estCents?: number;
   status: StepStatus;
   summary?: string;
+  /** For a search_tools step: the matched endpoints ("slug path"), listed when expanded. */
+  tools?: string[];
   requestId?: string;
   priceCents?: number;
   latencyMs?: number;
