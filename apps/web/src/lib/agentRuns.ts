@@ -38,7 +38,7 @@ export function applyTraceEventToRun(run: AgentRun, e: TraceEvent): AgentRun {
         ...run,
         steps: [
           ...run.steps,
-          { stepId: `search_${run.steps.length}`, api: "search_tools", path: `"${e.query}"`, status: "success", summary: `${e.resultCount} tools found` },
+          { stepId: `search_${run.steps.length}`, api: "search_tools", path: `"${e.query}"`, status: "success", summary: `${e.tools?.length ?? e.resultCount} tools found`, ...(e.tools ? { tools: e.tools } : {}) },
         ],
       };
     case "tool_call_started":

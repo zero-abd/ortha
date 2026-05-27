@@ -229,7 +229,7 @@ export function App() {
         case "tool_search":
           patchActive((m) => ({
             ...m,
-            steps: [...m.steps, { stepId: `search_${m.steps.length}`, api: "search_tools", path: `"${e.query}"`, status: "success", summary: `${e.resultCount} tools found` }],
+            steps: [...m.steps, { stepId: `search_${m.steps.length}`, api: "search_tools", path: `"${e.query}"`, status: "success", summary: `${e.tools?.length ?? e.resultCount} tools found`, ...(e.tools ? { tools: e.tools } : {}) }],
           }));
           break;
         case "tool_call_started":

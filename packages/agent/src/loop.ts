@@ -359,7 +359,10 @@ async function* dispatchSearch(
 ): AsyncGenerator<TraceEvent, DispatchResult> {
   const query = asString(call.args["query"]) ?? "";
   const results = await deps.orthogonal.search({ prompt: query });
-  yield { type: "tool_search", query, resultCount: results.length };
+  // Surface the matched endpoints (ranked, recommended first) in the trace so the chat
+  // can show WHICH tools were found, not just the count. Capped to keep the event small.
+  const tools = rankEndpoints(results).slice(0, 12).map(({ api, ep }) => `${api.slug} ${ep.path}`);
+  yield { type: "tool_search", query, resultCount: results.length, tools };
   return { kind: "ok", sessionCents, toolContent: summarizeSearch(query, results) };
 }
 
@@ -725,11 +728,10 @@ async function checkpoint(
   await deps.checkpoint({ messages: [...messages], step, sessionCents });
 }
 
-function summarizeSearch(query: string, results: readonly ToolApi[]): string {
-  if (results.length === 0) return `No tools found for "${query}".`;
-  // Flatten every endpoint with its parent api, then rank DETERMINISTICALLY so repeated
-  // searches route to the same endpoint: verified desc, then score desc, then price asc.
-  // The top entry is tagged "(recommended)" so the model picks it consistently.
+/** Flatten every endpoint with its parent api, ranked DETERMINISTICALLY (verified desc,
+ *  score desc, price asc) so repeated searches route to the same top endpoint. Shared by
+ *  the model-facing summary and the trace's tool list. */
+function rankEndpoints(results: readonly ToolApi[]): { api: ToolApi; ep: Endpoint }[] {
   const flat = results.flatMap((api) => api.endpoints.map((ep: Endpoint) => ({ api, ep })));
   flat.sort((a, b) => {
     const v = Number(b.ep.verified ?? false) - Number(a.ep.verified ?? false);
@@ -738,6 +740,13 @@ function summarizeSearch(query: string, results: readonly ToolApi[]): string {
     if (s !== 0) return s;
     return endpointPrice(a.ep) - endpointPrice(b.ep);
   });
+  return flat;
+}
+
+function summarizeSearch(query: string, results: readonly ToolApi[]): string {
+  if (results.length === 0) return `No tools found for "${query}".`;
+  // The top entry is tagged "(recommended)" so the model picks it consistently.
+  const flat = rankEndpoints(results);
   const lines = flat.map(({ api, ep }, i) => {
     const price = ep.price !== undefined ? `$${ep.price}` : "$?";
     const tags = [ep.verified ? "verified" : undefined, i === 0 ? "(recommended)" : undefined]
