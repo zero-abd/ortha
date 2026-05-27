@@ -95,13 +95,18 @@ export const META_TOOLS: readonly ToolSpec[] = [
   {
     name: WEB_SCRAPE,
     description:
-      "Fetch a single web page and read it as clean markdown. Use after web_search (or with a known URL) to read a page's actual contents. Always available and free.",
+      "Fetch web page(s) and read them as clean markdown. Use after web_search (or with known URLs) to read pages' actual contents. Pass `url` for one page, or `urls` (an array) to read several at once — they're fetched in parallel, so batch multiple reads into a single call instead of scraping one at a time. Always available and free.",
     inputSchema: {
       type: "object",
       properties: {
-        url: { type: "string", description: "Absolute http(s) URL of the page to read." },
+        url: { type: "string", description: "Absolute http(s) URL of a single page to read." },
+        urls: {
+          type: "array",
+          items: { type: "string" },
+          description: "Absolute http(s) URLs to read in parallel. Preferred when you want 2+ pages.",
+        },
       },
-      required: ["url"],
+      required: [],
       additionalProperties: false,
     },
   },
@@ -122,7 +127,8 @@ export function buildSystemPrompt(now: Date): string {
     "open web) and web_scrape (read a page as markdown). Reach for them WHEN YOU ACTUALLY NEED",
     "them: current or recent events, real-time or fast-changing facts, specific people/companies/",
     "contacts, niche or obscure details, or anything you're not confident you know — typically",
-    "web_search first, then web_scrape the most promising results. For timeless or general",
+    "web_search first, then web_scrape the most promising results (pass several URLs to",
+    "web_scrape in one call to read them in parallel). For timeless or general",
     "knowledge you already know well (definitions, concepts, how-tos, math, code), just answer",
     "directly without searching.",
     "(2) Orthogonal's paid API catalog, discovered at runtime: search_tools to find an endpoint,",

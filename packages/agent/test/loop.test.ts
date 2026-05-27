@@ -12,6 +12,7 @@ import {
   type ReservationId,
   type StreamInput,
   type TraceEvent,
+  type WebPage,
 } from "@ortha/contracts";
 import {
   makeMockBudgetPolicy,
@@ -525,6 +526,35 @@ describe("runAgentTurn — web tools", () => {
     const failed = events.find((e) => e.type === "tool_result" && (e as { ok: boolean }).ok === false);
     expect(failed).toBeTruthy();
     expect(events.some((e) => e.type === "error")).toBe(false);
+    expect(events.at(-1)).toEqual({ type: "done", stopReason: "end" });
+  });
+
+  it("reads multiple URLs in parallel via scrapeMany and feeds every page back", async () => {
+    const seen: string[][] = [];
+    const web = makeMockWebClient({
+      async scrapeMany(urls) {
+        seen.push([...urls]);
+        return urls.map((url, i) =>
+          i === 1
+            ? ({ status: "rejected", reason: new Error("blocked") } as PromiseRejectedResult)
+            : ({ status: "fulfilled", value: { url, title: `Page ${i}`, markdown: `body ${i}`, truncated: false } } as PromiseFulfilledResult<WebPage>),
+        );
+      },
+    });
+    const llm = makeTurnScriptedLLM([
+      [{ type: "tool_call_request", id: "w1", name: "web_scrape", args: { urls: ["https://a.com", "https://b.com", "https://c.com"] } }, { type: "done", stopReason: "tool_use" }],
+      [{ type: "token", text: "Summarized three sources." }, { type: "done", stopReason: "end" }],
+    ]);
+    const events = await collect(baseDeps({ llm, web }));
+
+    // One batched call, scraped concurrently (not three serial scrape() calls).
+    expect(seen).toEqual([["https://a.com", "https://b.com", "https://c.com"]]);
+    const started = events.find((e) => e.type === "tool_call_started");
+    expect(started).toMatchObject({ api: "web", estCents: 0 });
+    // 2 of 3 fulfilled → still ok, partial failure doesn't sink the batch.
+    const result = events.find((e) => e.type === "tool_result");
+    expect(result).toMatchObject({ ok: true, priceCents: 0 });
+    expect((result as { summary: string }).summary).toContain("2/3");
     expect(events.at(-1)).toEqual({ type: "done", stopReason: "end" });
   });
 });

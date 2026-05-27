@@ -17,6 +17,7 @@ import {
   type ToolApi,
   type TraceEvent,
   type WebClient,
+  type WebPage,
   type WorkspaceId,
 } from "@ortha/contracts";
 import { distill, requestKey } from "@ortha/harness";
@@ -436,31 +437,75 @@ async function* dispatchWebSearch(
   }
 }
 
+/** Markdown for one fetched page, with a source header. */
+function pageSection(page: WebPage): string {
+  const header = page.title ? `# ${page.title}\n(source: ${page.url})` : `(source: ${page.url})`;
+  return `${header}\n\n${page.markdown}`;
+}
+
 async function* dispatchWebScrape(
   deps: AgentDeps,
   call: ToolCallRequest,
   stepId: number,
   sessionCents: number,
 ): AsyncGenerator<TraceEvent, DispatchResult> {
-  const url = asString(call.args["url"]) ?? "";
+  const single = asString(call.args["url"]);
+  const many = Array.isArray(call.args["urls"])
+    ? (call.args["urls"] as unknown[]).filter((u): u is string => typeof u === "string" && u.trim().length > 0)
+    : [];
+  // De-dup, preserve order; a lone `url` is just a one-element batch.
+  const urls = [...new Set([...(single && single.trim() ? [single] : []), ...many])];
   const stepLabel = `step_${stepId}`;
-  yield { type: "tool_call_started", stepId: stepLabel, api: "web", path: url || "scrape", estCents: 0 };
+  if (urls.length === 0) {
+    return { kind: "ok", sessionCents, toolContent: "web_scrape requires a 'url' or a non-empty 'urls' array." };
+  }
+
+  // Single page: one tool_call_started + one tool_result, as before.
+  if (urls.length === 1) {
+    const url = urls[0]!;
+    yield { type: "tool_call_started", stepId: stepLabel, api: "web", path: url, estCents: 0 };
+    const startedAt = Date.now();
+    try {
+      const page = await deps.web.scrape(url);
+      yield {
+        type: "tool_result",
+        stepId: stepLabel,
+        requestId: asRequestId(`web_${stepLabel}`),
+        summary: `read ${page.url} (${page.markdown.length} chars${page.truncated ? ", truncated" : ""})`,
+        priceCents: 0,
+        latencyMs: Date.now() - startedAt,
+        ok: true,
+      };
+      return { kind: "ok", sessionCents, toolContent: pageSection(page) };
+    } catch (err) {
+      return yield* webFailed(stepLabel, "web_scrape", startedAt, err, sessionCents);
+    }
+  }
+
+  // Multiple pages: fetch concurrently (bounded fan-out in the web client) so a
+  // research turn reads N pages in one round-trip of latency, not N.
+  yield { type: "tool_call_started", stepId: stepLabel, api: "web", path: `scrape ${urls.length} pages`, estCents: 0 };
   const startedAt = Date.now();
   try {
-    const page = await deps.web.scrape(url);
+    const settled = await deps.web.scrapeMany(urls);
+    const okCount = settled.filter((s) => s.status === "fulfilled").length;
     yield {
       type: "tool_result",
       stepId: stepLabel,
       requestId: asRequestId(`web_${stepLabel}`),
-      summary: `read ${page.url} (${page.markdown.length} chars${page.truncated ? ", truncated" : ""})`,
+      summary: `read ${okCount}/${urls.length} pages`,
       priceCents: 0,
       latencyMs: Date.now() - startedAt,
-      ok: true,
+      ok: okCount > 0,
     };
-    const header = page.title ? `# ${page.title}\n(source: ${page.url})\n\n` : `(source: ${page.url})\n\n`;
-    return { kind: "ok", sessionCents, toolContent: header + page.markdown };
+    const sections = settled.map((s, i) => {
+      if (s.status === "fulfilled") return pageSection(s.value);
+      const reason = s.reason instanceof Error ? s.reason.message : String(s.reason);
+      return `(failed to read ${urls[i]}: ${reason})`;
+    });
+    return { kind: "ok", sessionCents, toolContent: sections.join("\n\n---\n\n") };
   } catch (err) {
-    return yield* webFailed(stepLabel, "web_scrape", startedAt, url ? err : "missing url", sessionCents);
+    return yield* webFailed(stepLabel, "web_scrape", startedAt, err, sessionCents);
   }
 }
 

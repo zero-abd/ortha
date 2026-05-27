@@ -11,6 +11,11 @@ export interface RunDeps extends TurnDeps {
  * mock or demo fallback — a connection failure or a missing-keys error surfaces to
  * the caller (rendered as an error bubble) so the user always sees the real state.
  */
-export async function runTurn(text: string, deps: RunDeps, images?: readonly string[]): Promise<void> {
-  await runLiveTurn(text, deps, API, images);
+export async function runTurn(
+  text: string,
+  deps: RunDeps,
+  images?: readonly string[],
+  deepResearch?: boolean,
+): Promise<void> {
+  await runLiveTurn(text, deps, API, images, deepResearch);
 }

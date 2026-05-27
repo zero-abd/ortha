@@ -131,7 +131,7 @@ export class ConversationDO implements DurableObject {
   }
 
   private async onMessage(ws: WebSocket, ev: MessageEvent): Promise<void> {
-    let msg: { type?: string; text?: string; images?: unknown; response?: PermissionResponse };
+    let msg: { type?: string; text?: string; images?: unknown; deepResearch?: unknown; response?: PermissionResponse };
     try {
       msg = JSON.parse(typeof ev.data === "string" ? ev.data : "{}");
     } catch {
@@ -157,7 +157,7 @@ export class ConversationDO implements DurableObject {
     }
     this.running = true;
     try {
-      await this.runTurn(ws, msg.text, images);
+      await this.runTurn(ws, msg.text, images, msg.deepResearch === true);
     } finally {
       this.running = false;
     }
@@ -218,7 +218,7 @@ export class ConversationDO implements DurableObject {
     return DEFAULT_SETTINGS.monthlyCapCents;
   }
 
-  private async runTurn(ws: WebSocket, text: string, images: readonly string[] = []): Promise<void> {
+  private async runTurn(ws: WebSocket, text: string, images: readonly string[] = [], deepResearch = false): Promise<void> {
     await this.init();
     await this.store.appendMessage({ conversationId: this.conversationId, role: "user", content: text });
     await this.registerConversation(text.slice(0, 60)).catch(() => {});
@@ -281,6 +281,9 @@ export class ConversationDO implements DurableObject {
       model: ports.model,
       workspaceId: this.workspaceId,
       conversationId: this.conversationId,
+      // Deep-research mode (from the composer toggle) raises the per-turn web_search
+      // budget in the loop (4 → 8) so a multi-source research turn isn't starved.
+      deepResearch,
       // The gate event is already streamed to the client by the loop's `yield`
       // (relayed in the for-await below); here we only register the resolver and
       // await the client's reply. Re-sending it would double-render the chip.

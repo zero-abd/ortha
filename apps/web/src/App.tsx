@@ -284,7 +284,7 @@ export function App() {
           startCents: cost.sessionCents,
           capCents: cost.capCents,
           conversationId: activeId,
-        }, images);
+        }, images, deepResearch);
         finishAgentRun(runId);
       } catch (err) {
         const message = err instanceof Error ? err.message : "Couldn't reach Ortha. Check your connection and try again.";
