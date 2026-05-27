@@ -96,4 +96,37 @@ describe("openai-compat — tool round-trip serialization", () => {
     // The turn completed normally — no throw.
     expect(events.some((e) => e.type === "done")).toBe(true);
   });
+
+  it("captures Gemini 3's extra_content (thought_signature) on a streamed tool call", async () => {
+    const extra = { google: { thought_signature: "EuICabc123" } };
+    const chunks = [
+      { choices: [{ delta: { tool_calls: [{ index: 0, id: "c1", type: "function", extra_content: extra, function: { name: "get_weather", arguments: '{"city":"Paris"}' } }] } }] },
+      { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+    ];
+    const provider = createOpenAICompatProvider({ providerId: "gemini", apiKey: "k", transport: cannedTransport(chunks) });
+    const events: LLMEvent[] = [];
+    for await (const e of provider.streamCompletion({ model: "gemini-3-flash-preview", system: "", messages: [], tools: [], maxTokens: 256 })) events.push(e);
+
+    const call = events.find((e) => e.type === "tool_call_request") as Extract<LLMEvent, { type: "tool_call_request" }>;
+    expect(call.extra).toEqual(extra);
+  });
+
+  it("echoes a tool call's extra (thought_signature) back as extra_content when replaying history", async () => {
+    let body: { messages: Array<Record<string, unknown>> } | undefined;
+    const extra = { google: { thought_signature: "EuICabc123" } };
+    const messages: LLMMessage[] = [
+      { role: "user", content: "weather?" },
+      { role: "assistant", content: "", toolCalls: [{ id: "c1", name: "get_weather", args: { city: "Paris" }, extra }] },
+      { role: "tool", toolCallId: "c1", toolName: "get_weather", content: "sunny" },
+    ];
+    const provider = createOpenAICompatProvider({
+      providerId: "gemini",
+      apiKey: "k",
+      transport: cannedTransport(DONE, (r) => { body = JSON.parse(r.body) as typeof body; }),
+    });
+    await drain(provider.streamCompletion({ model: "gemini-3-flash-preview", system: "", messages, tools: [], maxTokens: 256 }));
+
+    const asst = body!.messages.find((m) => m.role === "assistant") as { tool_calls: Array<Record<string, unknown>> };
+    expect(asst.tool_calls[0]!.extra_content).toEqual(extra);
+  });
 });

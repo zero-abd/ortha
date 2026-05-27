@@ -30,7 +30,19 @@ export interface LLMMessage {
    * assistant turn that omits its tool_calls makes the following tool result an
    * orphan, which every provider rejects.
    */
-  readonly toolCalls?: readonly { readonly id: string; readonly name: string; readonly args: Record<string, unknown> }[];
+  readonly toolCalls?: readonly {
+    readonly id: string;
+    readonly name: string;
+    readonly args: Record<string, unknown>;
+    /**
+     * Opaque, provider-specific metadata that MUST be echoed back verbatim when the
+     * call is replayed in history. Gemini 3 returns a `thought_signature` per function
+     * call (as `extra_content`) and rejects a follow-up request whose functionCall
+     * parts omit it (HTTP 400). Captured + replayed by the OpenAI-compat adapter;
+     * ignored by adapters that don't need it.
+     */
+    readonly extra?: unknown;
+  }[];
 }
 
 /** Normalized streaming event. Every adapter maps its native stream to this union. */
@@ -41,6 +53,8 @@ export type LLMEvent =
       readonly id: string;
       readonly name: string;
       readonly args: Record<string, unknown>;
+      /** Opaque provider metadata to echo back on replay (e.g. Gemini 3 thought_signature). */
+      readonly extra?: unknown;
     }
   | {
       readonly type: "usage";

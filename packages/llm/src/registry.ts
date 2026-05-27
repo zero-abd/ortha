@@ -19,7 +19,9 @@ const MODELS: readonly ModelInfo[] = [
     free: true,
   },
   {
-    id: "gemini-3-pro-preview",
+    // gemini-3-pro / gemini-3-pro-preview are retired (404); gemini-3.1-pro-preview
+    // is the live 3-series Pro. Previews get retired — revisit if this 404s.
+    id: "gemini-3.1-pro-preview",
     provider: "gemini",
     displayName: "Gemini 3 Pro",
     inputPerMTokensCents: 200, // ~$2.00 / Mtok (approx; update when GA pricing lands)

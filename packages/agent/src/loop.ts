@@ -120,6 +120,8 @@ interface ToolCallRequest {
   readonly id: string;
   readonly name: string;
   readonly args: Record<string, unknown>;
+  /** Opaque provider metadata to replay verbatim (e.g. Gemini 3 thought_signature). */
+  readonly extra?: unknown;
 }
 
 /** What get_tool_details recorded about an endpoint, used to gate the later run. */
@@ -185,7 +187,7 @@ export async function* runAgentTurn(deps: AgentDeps, input: AgentInput): AsyncIt
             yield { type: "token", text: event.text };
             break;
           case "tool_call_request":
-            pending.push({ id: event.id, name: event.name, args: event.args });
+            pending.push({ id: event.id, name: event.name, args: event.args, ...(event.extra !== undefined ? { extra: event.extra } : {}) });
             break;
           case "usage":
             // LLM token spend is accounted elsewhere; the cost meter here tracks tool spend.
@@ -200,7 +202,7 @@ export async function* runAgentTurn(deps: AgentDeps, input: AgentInput): AsyncIt
       // (id + name + args), not just ids: replaying an assistant turn without its
       // tool_calls orphans the following tool result and every provider rejects it.
       if (assistantText.length > 0 || pending.length > 0) {
-        const toolCalls = pending.map((p) => ({ id: p.id, name: p.name, args: p.args }));
+        const toolCalls = pending.map((p) => ({ id: p.id, name: p.name, args: p.args, ...(p.extra !== undefined ? { extra: p.extra } : {}) }));
         const assistantMsg: LLMMessage = {
           role: "assistant",
           content: assistantText,
