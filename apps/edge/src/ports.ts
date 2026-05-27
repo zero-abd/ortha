@@ -1,5 +1,6 @@
 import { createKeyVault } from "@ortha/auth";
 import {
+  asWorkspaceId,
   type BudgetPolicy,
   type LLMProvider,
   type MemoryStore,
@@ -36,12 +37,16 @@ const BASE_URLS: Record<"openai" | "openrouter" | "gemini", string> = {
 export async function buildLivePorts(
   env: Env,
   ws: WorkspaceId,
+  deviceId: string | null,
   spendStore?: SpendStorePort,
   rawStore?: KvPort<unknown>,
 ): Promise<AgentPorts | null> {
+  // Keys are device-scoped (never synced); settings + budget stay workspace-scoped (synced).
+  if (!deviceId) return null;
+  const keyScope = asWorkspaceId(deviceId);
   const vault = await createKeyVault({ masterKeyBase64: env.KEY_ENCRYPTION_KEY, store: kvStore(env.KV) });
 
-  const orthoKey = await vault.getKey(ws, "orthogonal");
+  const orthoKey = await vault.getKey(keyScope, "orthogonal");
   if (!orthoKey) return null;
 
   const rawSettings = await env.KV.get(`settings:${ws}`);
@@ -52,7 +57,7 @@ export async function buildLivePorts(
   const info = defaultModelRegistry.get(model);
   if (!info) return null;
 
-  const llmKey = await vault.getKey(ws, info.provider);
+  const llmKey = await vault.getKey(keyScope, info.provider);
   if (!llmKey) return null;
 
   let llm: LLMProvider;

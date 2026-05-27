@@ -14,6 +14,7 @@ import type { Env } from "./env.js";
 import { buildLivePorts } from "./ports.js";
 import { createSqlRawStore, RAW_BLOBS_DDL } from "./raw-store.js";
 import { DurableSpendStore, SESSION_SPEND_DDL, WORKSPACE_SPEND_DDL } from "./spend-store.js";
+import { kvSessionStore } from "./auth-stores.js";
 
 const DEMO_WS: WorkspaceId = asWorkspaceId("demo-ws");
 const HISTORY_BUDGET_TOKENS = 8_000;
@@ -36,6 +37,7 @@ export class ConversationDO implements DurableObject {
   private initialized = false;
   private running = false;
   private workspaceId: WorkspaceId = DEMO_WS;
+  private deviceId: string | null = null;
   private pendingPermission: ((r: PermissionResponse) => void) | null = null;
 
   constructor(
@@ -49,8 +51,14 @@ export class ConversationDO implements DurableObject {
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    const wsParam = url.searchParams.get("ws");
-    if (wsParam && /^[a-zA-Z0-9_-]{6,64}$/.test(wsParam)) this.workspaceId = asWorkspaceId(wsParam);
+    // Identity comes from the session token (browsers can't set Authorization on a
+    // WebSocket, so it travels as ?token=). Keys are device-scoped via ?device=.
+    const token = url.searchParams.get("token");
+    const session = token ? await kvSessionStore(this.env.KV).get(token) : null;
+    const valid = session && session.expiresAt > Date.now() ? session : null;
+    if (valid) this.workspaceId = valid.workspaceId;
+    const deviceParam = url.searchParams.get("device");
+    if (deviceParam && /^[a-zA-Z0-9_-]{6,64}$/.test(deviceParam)) this.deviceId = deviceParam;
     // The client addresses this DO via idFromName(<path-name>); key storage + the KV
     // index by that same name so the conversation is re-openable. Falls back to ctx.id.
     const nameMatch = url.pathname.match(/\/conversations\/([^/]+)\//);
@@ -61,12 +69,21 @@ export class ConversationDO implements DurableObject {
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
-    this.handleSession(server);
+    this.handleSession(server, valid !== null);
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  private handleSession(ws: WebSocket): void {
+  private handleSession(ws: WebSocket, authed: boolean): void {
     ws.accept();
+    if (!authed) {
+      ws.send(JSON.stringify({ type: "error", code: "AUTH", message: "Your session expired — sign in again to continue." }));
+      try {
+        ws.close();
+      } catch {
+        /* already closed */
+      }
+      return;
+    }
     void this.sendHistory(ws);
     ws.addEventListener("message", (ev) => void this.onMessage(ws, ev));
   }
@@ -189,7 +206,7 @@ export class ConversationDO implements DurableObject {
 
     // Real ports from the workspace's BYOK keys. No keys configured → surface a
     // clear error and stop. We never run a fake/demo turn — real users, real spend.
-    const ports = await buildLivePorts(this.env, this.workspaceId, spendStore, rawStore).catch(() => null);
+    const ports = await buildLivePorts(this.env, this.workspaceId, this.deviceId, spendStore, rawStore).catch(() => null);
     if (!ports) {
       ws.send(
         JSON.stringify({

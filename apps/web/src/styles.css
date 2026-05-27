@@ -266,6 +266,34 @@ input:focus, textarea:focus { outline: none; border-color: var(--ink-soft); }
 .input::placeholder { color: var(--faint); }
 .tag-ok { color: var(--ok); font-size: 12px; }
 
+/* ── Tabbed settings (left rail + content panel) ───────────────────────── */
+.settings--tabbed { max-width: 760px; height: 78vh; max-height: 560px; flex-direction: row; }
+.settings__tabs { width: 168px; flex: none; background: var(--sidebar); border-right: 1px solid var(--hairline); display: flex; flex-direction: column; gap: 2px; padding: 16px 10px; }
+.settings__tabs-title { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--faint); padding: 0 8px 10px; }
+.settings__tab { text-align: left; padding: 8px 10px; border-radius: var(--radius-sm); background: none; color: var(--ink-soft); font-size: 13.5px; transition: background 0.12s, color 0.12s; }
+.settings__tab:hover { background: var(--hover); color: var(--ink); }
+.settings__tab--active { background: var(--active); color: var(--ink); font-weight: 500; }
+.settings__panel { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.settings__content { padding: 20px 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; flex: 1; }
+.acct-card { display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--hairline); border-radius: var(--radius-sm); background: var(--surface); }
+.usage__headline { display: flex; align-items: baseline; gap: 6px; }
+.usage__amt { font-size: 24px; font-weight: 600; color: var(--ink); }
+
+/* ── Auth screen (login / signup gate) ─────────────────────────────────── */
+.auth { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--bg); padding: 24px; }
+.auth__card { width: 100%; max-width: 380px; display: flex; flex-direction: column; gap: 12px; padding: 32px 28px; background: var(--raised); border: 1px solid var(--hairline); border-radius: var(--radius); box-shadow: var(--shadow-sm); }
+.auth__brand { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.auth__title { font-size: 22px; font-weight: 600; color: var(--ink); }
+.auth__sub { font-size: 13.5px; color: var(--muted); margin-bottom: 6px; line-height: 1.45; }
+.auth__google { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; padding: 10px; border: 1px solid var(--hairline-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--ink); font-size: 14px; font-weight: 500; transition: background 0.12s; }
+.auth__google:hover { background: var(--hover); }
+.auth__or { display: flex; align-items: center; gap: 10px; color: var(--faint); font-size: 12px; }
+.auth__or::before, .auth__or::after { content: ""; flex: 1; height: 1px; background: var(--hairline); }
+.auth__submit { width: 100%; margin-top: 4px; justify-content: center; }
+.auth__error { font-size: 13px; color: var(--danger); }
+.auth__toggle { background: none; color: var(--muted); font-size: 13px; padding: 4px; }
+.auth__toggle:hover { color: var(--ink); }
+
 /* ── Discover APIs (top-left button + catalog modal) ───────────────────── */
 .discover-btn { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; border: 1px solid var(--hairline); border-radius: var(--radius-sm); background: var(--surface); color: var(--ink-soft); font-size: 13.5px; font-weight: 500; transition: background 0.12s, border-color 0.12s, color 0.12s; }
 .discover-btn:hover { background: var(--hover); border-color: var(--hairline-strong); color: var(--ink); }

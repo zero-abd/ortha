@@ -14,8 +14,12 @@ export const SCHEMA_STATEMENTS: readonly string[] = [
     id          TEXT PRIMARY KEY,
     email       TEXT NOT NULL,
     displayName TEXT,
-    createdAt   INTEGER NOT NULL
+    createdAt   INTEGER NOT NULL,
+    saltB64     TEXT,
+    hashB64     TEXT
   )`,
+  // Email is the login identifier — unique + indexed for findByEmail.
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users (email)`,
 
   `CREATE TABLE IF NOT EXISTS workspaces (
     id        TEXT PRIMARY KEY,
@@ -138,6 +142,9 @@ export const SCHEMA_SQL: string = SCHEMA_STATEMENTS.map((s) => `${s};`).join("\n
  */
 const MIGRATION_STATEMENTS: readonly string[] = [
   `ALTER TABLE messages ADD COLUMN toolMeta TEXT NOT NULL DEFAULT '{}'`,
+  // Password credentials for email/password users (null for OAuth-only users).
+  `ALTER TABLE users ADD COLUMN saltB64 TEXT`,
+  `ALTER TABLE users ADD COLUMN hashB64 TEXT`,
 ];
 
 /** Apply the schema to a synchronous {@link SqlDb}. Idempotent (IF NOT EXISTS + guarded migrations). */
