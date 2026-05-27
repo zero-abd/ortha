@@ -49,9 +49,13 @@ describe("validateSkillInput", () => {
   it("rejects an empty template", () => {
     expect(validateSkillInput({ name: "ok", template: "" })).toEqual({ error: "template is required" });
   });
-  it("rejects a template over 2000 chars", () => {
-    const v = validateSkillInput({ name: "ok", template: "x".repeat(2001) });
+  it("rejects a template over the max length", () => {
+    const v = validateSkillInput({ name: "ok", template: "x".repeat(30001) });
     expect("error" in v && v.error).toMatch(/too long/);
+  });
+  it("accepts an installed public skill's full SKILL.md (well over the old 2000 cap)", () => {
+    const v = validateSkillInput({ name: "find-dentists", template: "x".repeat(22203) });
+    expect("error" in v).toBe(false);
   });
 });
 
