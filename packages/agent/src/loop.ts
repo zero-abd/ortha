@@ -15,6 +15,7 @@ import {
   type ReservationId,
   type SideEffectClass,
   type ToolApi,
+  type ToolSpec,
   type TraceEvent,
   type WebClient,
   type WebPage,
@@ -28,9 +29,9 @@ import {
   buildSystemPrompt,
   EXPAND_RESULT,
   GET_TOOL_DETAILS,
-  META_TOOLS,
   RUN_TOOL,
   SEARCH_TOOLS,
+  toolsForTurn,
   WEB_SCRAPE,
   WEB_SEARCH,
 } from "./tools.js";
@@ -68,6 +69,12 @@ export interface AgentDeps {
   readonly maxIterations?: number;
   /** Raises the per-turn web_search cap for explicit deep-research turns. */
   readonly deepResearch?: boolean;
+  /**
+   * Gates the always-on free web tools. Defaults to ON (undefined → true). When
+   * explicitly false, web_search/web_scrape are omitted from the tools advertised to
+   * the model for this turn (the catalog meta-tools stay), so it cannot search/scrape.
+   */
+  readonly webSearch?: boolean;
 }
 
 export interface AgentInput {
@@ -145,6 +152,8 @@ interface WebSearchBudget {
 export async function* runAgentTurn(deps: AgentDeps, input: AgentInput): AsyncIterable<TraceEvent> {
   const maxTokens = deps.maxTokens ?? DEFAULT_MAX_TOKENS;
   const maxIterations = deps.maxIterations ?? DEFAULT_MAX_ITERATIONS;
+  // Tools advertised this turn: drops the free web tools when web access is gated off.
+  const tools = toolsForTurn(deps.webSearch);
 
   const messages: LLMMessage[] = [...input.messages];
   let sessionCents = 0;
@@ -177,7 +186,7 @@ export async function* runAgentTurn(deps: AgentDeps, input: AgentInput): AsyncIt
         model: deps.model,
         system: buildSystemPrompt(new Date()),
         messages,
-        tools: META_TOOLS,
+        tools,
         maxTokens,
       })) {
         switch (event.type) {
@@ -229,7 +238,7 @@ export async function* runAgentTurn(deps: AgentDeps, input: AgentInput): AsyncIt
         // rather than ending on an empty bubble — capped at one attempt below.
         if (!emittedAnyToken) {
           await checkpoint(deps, messages, ++stepCounter, sessionCents);
-          yield* synthesizeBlankTurn(deps, messages, maxTokens);
+          yield* synthesizeBlankTurn(deps, messages, maxTokens, tools);
           await checkpoint(deps, messages, ++stepCounter, sessionCents);
           yield { type: "done", stopReason: "end" };
           return;
@@ -259,7 +268,7 @@ export async function* runAgentTurn(deps: AgentDeps, input: AgentInput): AsyncIt
     // ── 4. Hit the iteration cap without a final answer. If nothing was ever
     //       streamed, give one synthesis retry so the user still gets an answer. ──
     if (!emittedAnyToken) {
-      yield* synthesizeBlankTurn(deps, messages, maxTokens);
+      yield* synthesizeBlankTurn(deps, messages, maxTokens, tools);
       await checkpoint(deps, messages, ++stepCounter, sessionCents);
     }
     yield { type: "done", stopReason: "max_tokens" };
@@ -277,6 +286,7 @@ async function* synthesizeBlankTurn(
   deps: AgentDeps,
   messages: LLMMessage[],
   maxTokens: number,
+  tools: readonly ToolSpec[],
 ): AsyncGenerator<TraceEvent, void> {
   // Ephemeral nudge: not persisted via onMessage, so it stays out of the transcript.
   const prompted: LLMMessage[] = [...messages, { role: "user", content: SYNTHESIZE_NUDGE }];
@@ -286,7 +296,7 @@ async function* synthesizeBlankTurn(
       model: deps.model,
       system: buildSystemPrompt(new Date()),
       messages: prompted,
-      tools: META_TOOLS,
+      tools,
       maxTokens,
     })) {
       if (event.type === "token") {

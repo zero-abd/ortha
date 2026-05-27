@@ -112,6 +112,19 @@ export const META_TOOLS: readonly ToolSpec[] = [
   },
 ];
 
+/** The always-on free web tools, kept as a set so a turn can drop them when web access is gated off. */
+export const WEB_TOOL_NAMES: ReadonlySet<string> = new Set([WEB_SEARCH, WEB_SCRAPE]);
+
+/**
+ * The tool list advertised to the model for one turn. `webSearch` defaults to ON
+ * (undefined → true); when explicitly false, the free web tools are omitted so the
+ * model can neither web-search nor scrape that turn. The catalog meta-tools always stay.
+ */
+export function toolsForTurn(webSearch: boolean | undefined): readonly ToolSpec[] {
+  if (webSearch === false) return META_TOOLS.filter((t) => !WEB_TOOL_NAMES.has(t.name));
+  return META_TOOLS;
+}
+
 const DATE_FMT = new Intl.DateTimeFormat("en-US", { month: "long", day: "numeric", year: "numeric" });
 
 /**

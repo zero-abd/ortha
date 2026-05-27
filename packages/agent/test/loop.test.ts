@@ -559,6 +559,52 @@ describe("runAgentTurn — web tools", () => {
   });
 });
 
+describe("runAgentTurn — webSearch flag gates the web tools", () => {
+  // An LLM that records the StreamInput it was handed each turn, so we can assert
+  // exactly which tools were advertised to the model.
+  function makeCapturingLLM(): { llm: LLMProvider; inputs: StreamInput[] } {
+    const inputs: StreamInput[] = [];
+    const llm: LLMProvider = {
+      id: "anthropic",
+      async *streamCompletion(input: StreamInput): AsyncIterable<LLMEvent> {
+        inputs.push(input);
+        yield { type: "token", text: "ok" };
+        yield { type: "done", stopReason: "end" };
+      },
+    };
+    return { llm, inputs };
+  }
+
+  it("omits web_search/web_scrape from the advertised tools when webSearch is false", async () => {
+    const { llm, inputs } = makeCapturingLLM();
+    await collect(baseDeps({ llm, webSearch: false }));
+    const names = inputs[0]!.tools.map((t) => t.name);
+    expect(names).not.toContain("web_search");
+    expect(names).not.toContain("web_scrape");
+    // The catalog meta-tools still stay.
+    expect(names).toContain("search_tools");
+    expect(names).toContain("get_tool_details");
+    expect(names).toContain("run_tool");
+    expect(names).toContain("expand_result");
+  });
+
+  it("advertises web_search/web_scrape when the flag is unset (defaults ON)", async () => {
+    const { llm, inputs } = makeCapturingLLM();
+    await collect(baseDeps({ llm }));
+    const names = inputs[0]!.tools.map((t) => t.name);
+    expect(names).toContain("web_search");
+    expect(names).toContain("web_scrape");
+  });
+
+  it("advertises the web tools when webSearch is explicitly true", async () => {
+    const { llm, inputs } = makeCapturingLLM();
+    await collect(baseDeps({ llm, webSearch: true }));
+    const names = inputs[0]!.tools.map((t) => t.name);
+    expect(names).toContain("web_search");
+    expect(names).toContain("web_scrape");
+  });
+});
+
 describe("runAgentTurn — iteration cap", () => {
   it("stops with max_tokens when the model never stops requesting tools", async () => {
     // Every turn requests a tool, so the loop must hit its iteration cap.
