@@ -81,7 +81,11 @@ export interface AgentInput {
   readonly messages: readonly LLMMessage[];
 }
 
-const DEFAULT_MAX_TOKENS = 1024;
+// Output-token ceiling per model call. Must cover BOTH a "thinking" model's hidden
+// reasoning tokens AND the visible answer — Gemini 3 counts thinking against max_tokens,
+// so a low cap (1024) gets eaten by reasoning on a heavy multi-search turn and the
+// answer truncates mid-sentence. Keep this generous so research answers complete.
+const DEFAULT_MAX_TOKENS = 8192;
 const DEFAULT_MAX_ITERATIONS = 8;
 /** How many times we nudge a model that narrates a next tool action without
  *  emitting the call, before accepting its turn as final. Bounds wasted turns. */
