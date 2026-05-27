@@ -5,6 +5,7 @@ import {
   isOrthaError,
   type BudgetPolicy,
   type ConversationId,
+  type Endpoint,
   type IdempotencyKey,
   type LLMMessage,
   type LLMProvider,
@@ -23,12 +24,12 @@ import {
   asRecord,
   asString,
   asStringRecord,
+  buildSystemPrompt,
   EXPAND_RESULT,
   GET_TOOL_DETAILS,
   META_TOOLS,
   RUN_TOOL,
   SEARCH_TOOLS,
-  SYSTEM_PROMPT,
   WEB_SCRAPE,
   WEB_SEARCH,
 } from "./tools.js";
@@ -64,6 +65,8 @@ export interface AgentDeps {
   readonly maxTokens?: number;
   /** Max tool-using iterations before forcing a stop. Defaults to 8. */
   readonly maxIterations?: number;
+  /** Raises the per-turn web_search cap for explicit deep-research turns. */
+  readonly deepResearch?: boolean;
 }
 
 export interface AgentInput {
@@ -95,6 +98,23 @@ function looksLikeUnfulfilledIntent(text: string): boolean {
 const CONTINUE_NUDGE =
   "Continue now: make the tool call you just described (search_tools / get_tool_details / run_tool), or give your final answer in plain language. Do not reply again with only a description of what you intend to do.";
 
+/** Per-turn cap on free web_search calls; raised when deep-research mode is requested. */
+const WEB_SEARCH_BUDGET = 4;
+const WEB_SEARCH_BUDGET_DEEP = 8;
+
+/** Normalize a query so near-identical web searches (case/whitespace) collapse to one. */
+function normalizeQuery(q: string): string {
+  return q.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+// A turn can legitimately reach `done` with no answer tokens and no pending call:
+// heavy-search budget exhaustion, or the cold-start first-message race. Rather than
+// emit an empty bubble, prompt the model ONCE to synthesize from what it has.
+const SYNTHESIZE_NUDGE =
+  "Answer now using what you already have from this turn. Give your best complete answer in plain language; do not call any more tools.";
+const BLANK_FALLBACK =
+  "I wasn't able to put together an answer for that just now. Could you rephrase or narrow the question?";
+
 interface ToolCallRequest {
   readonly id: string;
   readonly name: string;
@@ -105,6 +125,13 @@ interface ToolCallRequest {
 interface EndpointInfo {
   readonly sideEffect: SideEffectClass;
   readonly longRunning: boolean;
+}
+
+/** Per-turn free-web-search accounting: call budget + dedup of normalized queries. */
+interface WebSearchBudget {
+  used: number;
+  readonly cap: number;
+  readonly seen: Set<string>;
 }
 
 /**
@@ -120,6 +147,16 @@ export async function* runAgentTurn(deps: AgentDeps, input: AgentInput): AsyncIt
   let sessionCents = 0;
   let stepCounter = 0;
   let autoContinues = 0;
+  // True once ANY assistant token was streamed this turn. Drives the blank-turn
+  // guard: a turn that reaches `done` having emitted nothing gets one synthesis retry.
+  let emittedAnyToken = false;
+  // Per-turn free-web-search accounting: a call budget plus a dedup set of normalized
+  // queries, so a model can't burn the turn re-running the same/near-identical search.
+  const webSearch: WebSearchBudget = {
+    used: 0,
+    cap: deps.deepResearch ? WEB_SEARCH_BUDGET_DEEP : WEB_SEARCH_BUDGET,
+    seen: new Set<string>(),
+  };
   // Side-effect class per endpoint, recorded as the model inspects tools with
   // get_tool_details. run() reads it (gateway-authoritative, not model-asserted) to
   // gate genuine writes behind a confirmation modal.
@@ -132,9 +169,10 @@ export async function* runAgentTurn(deps: AgentDeps, input: AgentInput): AsyncIt
       let streamStopReason: "end" | "tool_use" | "max_tokens" | "error" = "end";
 
       // ── 1. Stream one model turn, relaying tokens and capturing tool calls ──
+      //    Build the prompt per turn so today's injected date never goes stale.
       for await (const event of deps.llm.streamCompletion({
         model: deps.model,
-        system: SYSTEM_PROMPT,
+        system: buildSystemPrompt(new Date()),
         messages,
         tools: META_TOOLS,
         maxTokens,
@@ -142,6 +180,7 @@ export async function* runAgentTurn(deps: AgentDeps, input: AgentInput): AsyncIt
         switch (event.type) {
           case "token":
             assistantText += event.text;
+            if (event.text.length > 0) emittedAnyToken = true;
             yield { type: "token", text: event.text };
             break;
           case "tool_call_request":
@@ -182,6 +221,16 @@ export async function* runAgentTurn(deps: AgentDeps, input: AgentInput): AsyncIt
           await checkpoint(deps, messages, ++stepCounter, sessionCents);
           continue;
         }
+        // Blank-turn guard: the model is done but emitted no answer text anywhere this
+        // turn (budget exhaustion or cold-start race). Stream a single synthesis retry
+        // rather than ending on an empty bubble — capped at one attempt below.
+        if (!emittedAnyToken) {
+          await checkpoint(deps, messages, ++stepCounter, sessionCents);
+          yield* synthesizeBlankTurn(deps, messages, maxTokens);
+          await checkpoint(deps, messages, ++stepCounter, sessionCents);
+          yield { type: "done", stopReason: "end" };
+          return;
+        }
         await checkpoint(deps, messages, ++stepCounter, sessionCents);
         yield { type: "done", stopReason: streamStopReason === "max_tokens" ? "max_tokens" : "end" };
         return;
@@ -189,7 +238,7 @@ export async function* runAgentTurn(deps: AgentDeps, input: AgentInput): AsyncIt
 
       // ── 3. Dispatch each requested tool call. ──
       for (const call of pending) {
-        const result = yield* dispatch(deps, call, ++stepCounter, sessionCents, sideEffects);
+        const result = yield* dispatch(deps, call, ++stepCounter, sessionCents, sideEffects, webSearch);
         if (result.kind === "cancelled") {
           await checkpoint(deps, messages, stepCounter, sessionCents);
           yield { type: "done", stopReason: "end" };
@@ -204,11 +253,54 @@ export async function* runAgentTurn(deps: AgentDeps, input: AgentInput): AsyncIt
       await checkpoint(deps, messages, stepCounter, sessionCents);
     }
 
-    // ── 4. Hit the iteration cap without a final answer. ──
+    // ── 4. Hit the iteration cap without a final answer. If nothing was ever
+    //       streamed, give one synthesis retry so the user still gets an answer. ──
+    if (!emittedAnyToken) {
+      yield* synthesizeBlankTurn(deps, messages, maxTokens);
+      await checkpoint(deps, messages, ++stepCounter, sessionCents);
+    }
     yield { type: "done", stopReason: "max_tokens" };
   } catch (err) {
     yield* emitError(err);
   }
+}
+
+/**
+ * One-shot blank-turn recovery: re-prompt the model to answer from what it already
+ * gathered this turn (no further tools), stream that, and if it STILL emits nothing,
+ * stream a short honest fallback. Capped at this single attempt — never loops.
+ */
+async function* synthesizeBlankTurn(
+  deps: AgentDeps,
+  messages: LLMMessage[],
+  maxTokens: number,
+): AsyncGenerator<TraceEvent, void> {
+  // Ephemeral nudge: not persisted via onMessage, so it stays out of the transcript.
+  const prompted: LLMMessage[] = [...messages, { role: "user", content: SYNTHESIZE_NUDGE }];
+  let text = "";
+  try {
+    for await (const event of deps.llm.streamCompletion({
+      model: deps.model,
+      system: buildSystemPrompt(new Date()),
+      messages: prompted,
+      tools: META_TOOLS,
+      maxTokens,
+    })) {
+      if (event.type === "token") {
+        text += event.text;
+        if (event.text.length > 0) yield { type: "token", text: event.text };
+      }
+    }
+  } catch {
+    // Fall through to the static fallback below.
+  }
+  if (text.trim().length === 0) {
+    text = BLANK_FALLBACK;
+    yield { type: "token", text };
+  }
+  const msg: LLMMessage = { role: "assistant", content: text };
+  messages.push(msg);
+  await deps.onMessage?.(msg);
 }
 
 // ── Tool dispatch ────────────────────────────────────────────────────────────
@@ -223,6 +315,7 @@ async function* dispatch(
   stepId: number,
   sessionCents: number,
   sideEffects: Map<string, EndpointInfo>,
+  webSearch: WebSearchBudget,
 ): AsyncGenerator<TraceEvent, DispatchResult> {
   switch (call.name) {
     case SEARCH_TOOLS:
@@ -234,7 +327,7 @@ async function* dispatch(
     case EXPAND_RESULT:
       return yield* dispatchExpand(deps, call, sessionCents);
     case WEB_SEARCH:
-      return yield* dispatchWebSearch(deps, call, stepId, sessionCents);
+      return yield* dispatchWebSearch(deps, call, stepId, sessionCents, webSearch);
     case WEB_SCRAPE:
       return yield* dispatchWebScrape(deps, call, stepId, sessionCents);
     default:
@@ -301,10 +394,25 @@ async function* dispatchWebSearch(
   call: ToolCallRequest,
   stepId: number,
   sessionCents: number,
+  webSearch: WebSearchBudget,
 ): AsyncGenerator<TraceEvent, DispatchResult> {
   const query = asString(call.args["query"]) ?? "";
   const stepLabel = `step_${stepId}`;
   if (!query.trim()) return { kind: "ok", sessionCents, toolContent: "web_search requires a non-empty query." };
+
+  // Dedup near-identical queries: a repeated search yields no new info and burns the
+  // turn. Short-circuit (no network, no step) and point the model at earlier results.
+  const norm = normalizeQuery(query);
+  if (webSearch.seen.has(norm)) {
+    return { kind: "ok", sessionCents, toolContent: "Already searched that — use the earlier results." };
+  }
+  // Per-turn budget: once spent, force the model to answer with what it has.
+  if (webSearch.used >= webSearch.cap) {
+    return { kind: "ok", sessionCents, toolContent: "Search budget reached; answer with what you have." };
+  }
+  webSearch.used += 1;
+  webSearch.seen.add(norm);
+
   yield { type: "tool_call_started", stepId: stepLabel, api: "web", path: `search: "${query}"`, estCents: 0 };
   const startedAt = Date.now();
   try {
@@ -488,7 +596,10 @@ async function* dispatchRun(
       workspaceRemainingCents: remaining,
     };
 
-    const feedback = `${api} ${path} → ${distilled.summary} (requestId: ${runResult.requestId})`;
+    // Echo the inputs actually sent so the model can self-check result-vs-request
+    // (did the returned entity match the email/name/domain it asked for?).
+    const compactInputs = compactJson({ ...(body ? { body } : {}), ...(query ? { query } : {}) });
+    const feedback = `run_tool ${api} ${path} ${compactInputs} → ${distilled.summary} (requestId: ${runResult.requestId})`;
     return { kind: "ok", sessionCents: nextSession, toolContent: feedback };
   } catch (err) {
     // The call failed: release the hold so we never leak the reservation.
@@ -555,12 +666,32 @@ async function checkpoint(
 
 function summarizeSearch(query: string, results: readonly ToolApi[]): string {
   if (results.length === 0) return `No tools found for "${query}".`;
-  const lines = results.flatMap((api) =>
-    api.endpoints.map(
-      (ep) => `${api.slug} ${ep.path} [${ep.method}] $${ep.price} — ${ep.description}`,
-    ),
-  );
+  // Flatten every endpoint with its parent api, then rank DETERMINISTICALLY so repeated
+  // searches route to the same endpoint: verified desc, then score desc, then price asc.
+  // The top entry is tagged "(recommended)" so the model picks it consistently.
+  const flat = results.flatMap((api) => api.endpoints.map((ep: Endpoint) => ({ api, ep })));
+  flat.sort((a, b) => {
+    const v = Number(b.ep.verified ?? false) - Number(a.ep.verified ?? false);
+    if (v !== 0) return v;
+    const s = (b.ep.score ?? 0) - (a.ep.score ?? 0);
+    if (s !== 0) return s;
+    return endpointPrice(a.ep) - endpointPrice(b.ep);
+  });
+  const lines = flat.map(({ api, ep }, i) => {
+    const price = ep.price !== undefined ? `$${ep.price}` : "$?";
+    const tags = [ep.verified ? "verified" : undefined, i === 0 ? "(recommended)" : undefined]
+      .filter(Boolean)
+      .join(" ");
+    return `${api.slug} ${ep.path} [${ep.method}] ${price} — ${ep.description}${tags ? ` ${tags}` : ""}`;
+  });
   return `Found ${results.length} API(s) for "${query}":\n${lines.join("\n")}`;
+}
+
+/** A sortable numeric price; endpoints without one rank last (treated as +∞). */
+function endpointPrice(ep: Endpoint): number {
+  if (ep.price === undefined) return Number.POSITIVE_INFINITY;
+  const n = Number.parseFloat(ep.price);
+  return Number.isFinite(n) ? n : Number.POSITIVE_INFINITY;
 }
 
 function safeJson(value: unknown): string {
@@ -569,4 +700,10 @@ function safeJson(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+/** Short JSON for echoing run_tool inputs back to the model; truncated to stay compact. */
+function compactJson(value: Record<string, unknown>, max = 200): string {
+  const s = safeJson(value);
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }

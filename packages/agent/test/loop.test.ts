@@ -545,3 +545,198 @@ describe("runAgentTurn — iteration cap", () => {
     expect(events.filter((e) => e.type === "tool_call_started")).toHaveLength(3);
   });
 });
+
+// Capture the tool-role content fed back to the model (toolContent) via onMessage,
+// since the loop never yields it as a TraceEvent.
+function captureToolContent() {
+  const contents: string[] = [];
+  const onMessage = async (m: LLMMessage) => {
+    if (m.role === "tool") contents.push(m.content);
+  };
+  return { contents, onMessage };
+}
+
+describe("runAgentTurn — deterministic catalog ranking", () => {
+  it("ranks verified desc, score desc, price asc and tags the top match (recommended)", async () => {
+    const orthogonal = makeMockOrthogonalClient({
+      async search() {
+        return [
+          {
+            name: "Cheap Unverified",
+            slug: "cheap",
+            endpoints: [{ id: "e0", path: "/p", method: "GET", description: "cheap but unverified", price: "0.01", verified: false, score: 0.99 }],
+          },
+          {
+            name: "Verified Mid",
+            slug: "midv",
+            endpoints: [{ id: "e1", path: "/p", method: "GET", description: "verified mid score", price: "0.05", verified: true, score: 0.50 }],
+          },
+          {
+            name: "Verified Top",
+            slug: "topv",
+            endpoints: [{ id: "e2", path: "/p", method: "GET", description: "verified top score", price: "0.09", verified: true, score: 0.90 }],
+          },
+        ];
+      },
+    });
+    const { contents, onMessage } = captureToolContent();
+    const llm = makeTurnScriptedLLM([
+      [{ type: "tool_call_request", id: "s1", name: "search_tools", args: { query: "x" } }, { type: "done", stopReason: "tool_use" }],
+      [{ type: "token", text: "ok" }, { type: "done", stopReason: "end" }],
+    ]);
+    await collect(baseDeps({ llm, orthogonal, onMessage }));
+
+    const summary = contents.find((c) => c.includes("Found"));
+    expect(summary).toBeTruthy();
+    const lines = (summary as string).split("\n").slice(1); // drop the "Found N API(s)" header
+    // Verified beats unverified regardless of its higher score; among verified, higher score wins.
+    expect(lines[0]).toContain("topv");
+    expect(lines[0]).toContain("(recommended)");
+    expect(lines[1]).toContain("midv");
+    expect(lines[2]).toContain("cheap");
+    // Only the top entry is tagged.
+    expect(lines.filter((l) => l.includes("(recommended)"))).toHaveLength(1);
+  });
+
+  it("breaks a verified+score tie by cheaper price", async () => {
+    const orthogonal = makeMockOrthogonalClient({
+      async search() {
+        return [
+          { name: "Pricey", slug: "pricey", endpoints: [{ id: "a", path: "/p", method: "GET", description: "d", price: "0.20", verified: true, score: 0.8 }] },
+          { name: "Cheap", slug: "cheapv", endpoints: [{ id: "b", path: "/p", method: "GET", description: "d", price: "0.02", verified: true, score: 0.8 }] },
+        ];
+      },
+    });
+    const { contents, onMessage } = captureToolContent();
+    const llm = makeTurnScriptedLLM([
+      [{ type: "tool_call_request", id: "s1", name: "search_tools", args: { query: "x" } }, { type: "done", stopReason: "tool_use" }],
+      [{ type: "token", text: "ok" }, { type: "done", stopReason: "end" }],
+    ]);
+    await collect(baseDeps({ llm, orthogonal, onMessage }));
+    const summary = contents.find((c) => c.includes("Found")) as string;
+    const firstLine = summary.split("\n")[1];
+    expect(firstLine).toContain("cheapv");
+    expect(firstLine).toContain("(recommended)");
+  });
+});
+
+describe("runAgentTurn — web_search budget + dedup", () => {
+  it("short-circuits a repeated (case/whitespace-normalized) query without re-hitting the web", async () => {
+    let calls = 0;
+    const web = makeMockWebClient({
+      async search() {
+        calls += 1;
+        return [{ title: "T", url: "https://e.com", snippet: "s" }];
+      },
+    });
+    const { contents, onMessage } = captureToolContent();
+    const llm = makeTurnScriptedLLM([
+      [{ type: "tool_call_request", id: "w1", name: "web_search", args: { query: "Who is the CEO" } }, { type: "done", stopReason: "tool_use" }],
+      [{ type: "tool_call_request", id: "w2", name: "web_search", args: { query: "  who is the   CEO " } }, { type: "done", stopReason: "tool_use" }],
+      [{ type: "token", text: "done" }, { type: "done", stopReason: "end" }],
+    ]);
+    await collect(baseDeps({ llm, web, onMessage }));
+    expect(calls).toBe(1); // the duplicate never reached the web client
+    expect(contents.some((c) => c.includes("Already searched that"))).toBe(true);
+  });
+
+  it("caps web_search per turn and feeds back the budget message", async () => {
+    let calls = 0;
+    const web = makeMockWebClient({
+      async search(q) {
+        calls += 1;
+        return [{ title: q, url: `https://e.com/${calls}`, snippet: "s" }];
+      },
+    });
+    // Six DISTINCT searches; default cap is 4 → 5th and 6th are refused.
+    const searchTurns = Array.from({ length: 6 }, (_, i) => [
+      { type: "tool_call_request", id: `w${i}`, name: "web_search", args: { query: `distinct query ${i}` } } as LLMEvent,
+      { type: "done", stopReason: "tool_use" } as LLMEvent,
+    ]);
+    const { contents, onMessage } = captureToolContent();
+    const llm = makeTurnScriptedLLM([...searchTurns, [{ type: "token", text: "done" }, { type: "done", stopReason: "end" }]]);
+    await collect(baseDeps({ llm, web, onMessage, maxIterations: 10 }));
+    expect(calls).toBe(4); // budget cap held
+    expect(contents.some((c) => c.includes("Search budget reached"))).toBe(true);
+  });
+
+  it("raises the cap in deep-research mode", async () => {
+    let calls = 0;
+    const web = makeMockWebClient({
+      async search(q) {
+        calls += 1;
+        return [{ title: q, url: `https://e.com/${calls}`, snippet: "s" }];
+      },
+    });
+    const searchTurns = Array.from({ length: 6 }, (_, i) => [
+      { type: "tool_call_request", id: `w${i}`, name: "web_search", args: { query: `distinct query ${i}` } } as LLMEvent,
+      { type: "done", stopReason: "tool_use" } as LLMEvent,
+    ]);
+    const llm = makeTurnScriptedLLM([...searchTurns, [{ type: "token", text: "done" }, { type: "done", stopReason: "end" }]]);
+    await collect(baseDeps({ llm, web, deepResearch: true, maxIterations: 10 }));
+    expect(calls).toBe(6); // all six fit under the deep-research cap (8)
+  });
+});
+
+describe("runAgentTurn — run_tool input echo", () => {
+  it("echoes the inputs sent in the tool feedback so the model can self-check", async () => {
+    const { contents, onMessage } = captureToolContent();
+    const llm = makeTurnScriptedLLM([
+      [RUN_CALL, { type: "done", stopReason: "tool_use" }],
+      [{ type: "token", text: "done" }, { type: "done", stopReason: "end" }],
+    ]);
+    await collect(baseDeps({ llm, onMessage }));
+    const feedback = contents.find((c) => c.startsWith("run_tool apollo"));
+    expect(feedback).toBeTruthy();
+    // The body the model sent is echoed back alongside the distilled summary + requestId.
+    expect(feedback as string).toContain("stripe.com");
+    expect(feedback as string).toContain("requestId:");
+  });
+});
+
+describe("runAgentTurn — blank-turn guard", () => {
+  it("does one synthesis retry when a turn ends with no answer tokens", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const llm = makeTurnScriptedLLM([
+      // turn 1: model ends with NO tokens and no tool call (cold-start race).
+      [{ type: "done", stopReason: "end" }],
+      // synthesis retry: now it answers.
+      [{ type: "token", text: "Here is the answer." }, { type: "done", stopReason: "end" }],
+    ]);
+    const events = await collect(baseDeps({ llm, onMessage }));
+    const tokens = events.filter((e) => e.type === "token").map((e) => (e as { text: string }).text).join("");
+    expect(tokens).toBe("Here is the answer.");
+    expect(events.at(-1)).toEqual({ type: "done", stopReason: "end" });
+    // The synthesis nudge itself is never persisted to the transcript.
+    const persistedNudge = onMessage.mock.calls.some(
+      ([m]) => (m as LLMMessage).role === "user" && (m as LLMMessage).content.includes("Answer now using what you already have"),
+    );
+    expect(persistedNudge).toBe(false);
+  });
+
+  it("streams an honest fallback line if the synthesis retry is also empty", async () => {
+    const llm = makeTurnScriptedLLM([
+      [{ type: "done", stopReason: "end" }], // blank turn
+      [{ type: "done", stopReason: "end" }], // blank retry too
+    ]);
+    const events = await collect(baseDeps({ llm }));
+    const tokens = events.filter((e) => e.type === "token").map((e) => (e as { text: string }).text).join("");
+    expect(tokens.length).toBeGreaterThan(0); // never an empty bubble
+    expect(tokens.toLowerCase()).toContain("rephrase");
+    expect(events.at(-1)).toEqual({ type: "done", stopReason: "end" });
+  });
+
+  it("does not retry when the turn already produced an answer", async () => {
+    let turns = 0;
+    const llm: LLMProvider = {
+      id: "anthropic",
+      async *streamCompletion(): AsyncIterable<LLMEvent> {
+        turns += 1;
+        yield { type: "token", text: "Answered." };
+        yield { type: "done", stopReason: "end" };
+      },
+    };
+    await collect(baseDeps({ llm }));
+    expect(turns).toBe(1); // a single, non-blank turn — no synthesis retry
+  });
+});
