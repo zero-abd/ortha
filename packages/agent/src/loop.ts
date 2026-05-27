@@ -62,7 +62,7 @@ export interface AgentDeps {
    * transport can persist the full turn (including tool calls + results with their
    * requestIds) — this is what lets a later turn `expand_result` a prior call.
    */
-  readonly onMessage?: (message: LLMMessage) => Promise<void> | void;
+  readonly onMessage?: (message: LLMMessage, meta?: { readonly priceCents?: number; readonly latencyMs?: number }) => Promise<void> | void;
   /** Hard ceiling on output tokens per LLM turn. Defaults to 1024. */
   readonly maxTokens?: number;
   /** Max tool-using iterations before forcing a stop. Defaults to 8. */
@@ -263,7 +263,10 @@ export async function* runAgentTurn(deps: AgentDeps, input: AgentInput): AsyncIt
         sessionCents = result.sessionCents;
         const toolMsg = toolMessage(call.id, call.name, result.toolContent);
         messages.push(toolMsg);
-        await deps.onMessage?.(toolMsg);
+        await deps.onMessage?.(toolMsg, {
+          ...(result.priceCents !== undefined ? { priceCents: result.priceCents } : {}),
+          ...(result.latencyMs !== undefined ? { latencyMs: result.latencyMs } : {}),
+        });
       }
 
       await checkpoint(deps, messages, stepCounter, sessionCents);
@@ -323,7 +326,16 @@ async function* synthesizeBlankTurn(
 // ── Tool dispatch ────────────────────────────────────────────────────────────
 
 type DispatchResult =
-  | { readonly kind: "ok"; readonly sessionCents: number; readonly toolContent: string }
+  | {
+      readonly kind: "ok";
+      readonly sessionCents: number;
+      readonly toolContent: string;
+      // Set for tool calls that produce a trace block (run_tool, web_*) so the transport
+      // can persist them on the tool message — letting a reopened conversation show the
+      // same price + latency the live trace did. Undefined for meta tools (no block).
+      readonly priceCents?: number;
+      readonly latencyMs?: number;
+    }
   | { readonly kind: "cancelled" };
 
 async function* dispatch(
@@ -397,16 +409,17 @@ async function* dispatchExpand(
 /** Emit a failed web step + feed the error back so the turn keeps going (free tools). */
 function* webFailed(stepLabel: string, tool: string, startedAt: number, err: unknown, sessionCents: number): Generator<TraceEvent, DispatchResult> {
   const message = err instanceof Error ? err.message : String(err);
+  const latencyMs = Date.now() - startedAt;
   yield {
     type: "tool_result",
     stepId: stepLabel,
     requestId: asRequestId(`web_${stepLabel}`),
     summary: `failed — ${message}`,
     priceCents: 0,
-    latencyMs: Date.now() - startedAt,
+    latencyMs,
     ok: false,
   };
-  return { kind: "ok", sessionCents, toolContent: `${tool} failed: ${message}. Try a different query/URL, or answer with what you already have.` };
+  return { kind: "ok", sessionCents, toolContent: `${tool} failed: ${message}. Try a different query/URL, or answer with what you already have.`, priceCents: 0, latencyMs };
 }
 
 async function* dispatchWebSearch(
@@ -450,7 +463,7 @@ async function* dispatchWebSearch(
       results.length === 0
         ? `No web results for "${query}".`
         : results.map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.snippet}`).join("\n");
-    return { kind: "ok", sessionCents, toolContent: body };
+    return { kind: "ok", sessionCents, toolContent: body, priceCents: 0, latencyMs: Date.now() - startedAt };
   } catch (err) {
     return yield* webFailed(stepLabel, "web_search", startedAt, err, sessionCents);
   }
@@ -495,7 +508,7 @@ async function* dispatchWebScrape(
         latencyMs: Date.now() - startedAt,
         ok: true,
       };
-      return { kind: "ok", sessionCents, toolContent: pageSection(page) };
+      return { kind: "ok", sessionCents, toolContent: pageSection(page), priceCents: 0, latencyMs: Date.now() - startedAt };
     } catch (err) {
       return yield* webFailed(stepLabel, "web_scrape", startedAt, err, sessionCents);
     }
@@ -522,7 +535,7 @@ async function* dispatchWebScrape(
       const reason = s.reason instanceof Error ? s.reason.message : String(s.reason);
       return `(failed to read ${urls[i]}: ${reason})`;
     });
-    return { kind: "ok", sessionCents, toolContent: sections.join("\n\n---\n\n") };
+    return { kind: "ok", sessionCents, toolContent: sections.join("\n\n---\n\n"), priceCents: 0, latencyMs: Date.now() - startedAt };
   } catch (err) {
     return yield* webFailed(stepLabel, "web_scrape", startedAt, err, sessionCents);
   }
@@ -664,7 +677,7 @@ async function* dispatchRun(
     // (did the returned entity match the email/name/domain it asked for?).
     const compactInputs = compactJson({ ...(body ? { body } : {}), ...(query ? { query } : {}) });
     const feedback = `run_tool ${api} ${path} ${compactInputs} → ${distilled.summary} (requestId: ${runResult.requestId})`;
-    return { kind: "ok", sessionCents: nextSession, toolContent: feedback };
+    return { kind: "ok", sessionCents: nextSession, toolContent: feedback, priceCents: runResult.priceCents, latencyMs };
   } catch (err) {
     // The call failed: release the hold so we never leak the reservation.
     await deps.budget.refund(reservation).catch(() => undefined);
@@ -692,6 +705,8 @@ async function* dispatchRun(
       kind: "ok",
       sessionCents,
       toolContent: `${api} ${path} failed (${code}: ${message}). Do not retry the same call — try a different tool, or answer with what you already have.`,
+      priceCents: 0,
+      latencyMs,
     };
   }
 }

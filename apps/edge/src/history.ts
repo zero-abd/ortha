@@ -7,10 +7,12 @@
 // live: each assistant turn's tool calls (api · path · status), with the requestId
 // recovered so the "Open raw" affordance still works after a reload.
 //
+// priceCents / latencyMs ARE restored: the loop now stashes them on the tool result's
+// persisted message (toolMeta), so a reopened block shows the same price + latency it did
+// live. (Older conversations written before this change simply omit them — TraceBlock
+// renders those fields conditionally, so the line still reads cleanly.)
+//
 // What is NOT recoverable (and is intentionally omitted):
-//   - priceCents / latencyMs — never persisted in the live path (no tool_calls /
-//     call_journal writes in prod), only carried on the streamed tool_result event.
-//     TraceBlock renders fine without them (they're conditionally shown).
 //   - search_tools lines — emitted as free meta events, not paid tool calls; the
 //     `search_tools` meta-tool turn is treated as internal plumbing and dropped.
 //
@@ -26,6 +28,8 @@ export interface HistoryStep {
   readonly status: "success" | "failed" | "running";
   readonly summary?: string;
   readonly requestId?: string;
+  readonly priceCents?: number;
+  readonly latencyMs?: number;
 }
 
 /** One restored chat turn: the plain bubble plus the trace steps that ran above it. */
@@ -149,6 +153,8 @@ export function reconstructHistory(messages: readonly Message[]): HistoryMessage
         status: failed ? "failed" : "success",
         ...(requestId ? { requestId } : {}),
         ...(summary ? { summary } : {}),
+        ...(typeof m.priceCents === "number" ? { priceCents: m.priceCents } : {}),
+        ...(typeof m.latencyMs === "number" ? { latencyMs: m.latencyMs } : {}),
       };
     }
   }

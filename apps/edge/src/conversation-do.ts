@@ -371,7 +371,7 @@ export class ConversationDO implements DurableObject {
       // turns + tool results, then the final answer). This is what makes cross-turn
       // expand_result reachable: a later turn reloads the requestId-bearing tool
       // messages. The user message was already persisted above.
-      onMessage: async (m) => {
+      onMessage: async (m, meta) => {
         // Mirror the streamed echo guard into the persisted transcript: if a final
         // assistant answer is a verbatim system-prompt dump, store the refusal instead
         // of the leak, so a later history reload can't re-serve it. Only plain
@@ -388,6 +388,10 @@ export class ConversationDO implements DurableObject {
           ...(m.toolCalls ? { toolCalls: m.toolCalls } : {}),
           ...(m.toolCallId ? { toolCallId: m.toolCallId } : {}),
           ...(m.toolName ? { toolName: m.toolName } : {}),
+          // Cost + latency of this tool result, persisted so a reopened conversation
+          // shows the same price/latency on the restored trace block as it did live.
+          ...(typeof meta?.priceCents === "number" ? { priceCents: meta.priceCents } : {}),
+          ...(typeof meta?.latencyMs === "number" ? { latencyMs: meta.latencyMs } : {}),
         });
       },
     };

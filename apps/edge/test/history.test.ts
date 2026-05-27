@@ -32,6 +32,9 @@ describe("reconstructHistory", () => {
       msg("tool", "run_tool textbelt /text {body:{...}} → {success:true,textId:42} (requestId: req_abc)", {
         toolCallId: "call_1",
         toolName: "run_tool",
+        // Persisted on the tool result (toolMeta) so price/latency restore on reload.
+        priceCents: 2.5,
+        latencyMs: 4840,
       }),
       msg("assistant", "Done — your text was sent."),
     ];
@@ -48,6 +51,9 @@ describe("reconstructHistory", () => {
     expect(step.status).toBe("success");
     expect(step.requestId).toBe("req_abc");
     expect(step.summary).toBe("{success:true,textId:42}");
+    // Price (a fractional cent) + latency round-trip onto the restored block.
+    expect(step.priceCents).toBe(2.5);
+    expect(step.latencyMs).toBe(4840);
     // The user turn carries no steps.
     expect(history[0]!.steps).toBeUndefined();
   });
