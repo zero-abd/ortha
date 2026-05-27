@@ -42,6 +42,22 @@ describe("createWebClient.search (DuckDuckGo)", () => {
     const web = createWebClient({ fetchImpl: fakeFetch({ "html.duckduckgo.com": { status: 503, body: "" } }) });
     await expect(web.search("x")).rejects.toThrow(/search failed \(503\)/);
   });
+
+  it("uses keyed Jina search (JSON) when a Jina key is present", async () => {
+    let sawAuth = false;
+    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+      const u = String(url);
+      if (u.includes("s.jina.ai")) {
+        sawAuth = (init?.headers as Record<string, string>)?.["Authorization"] === "Bearer jina_test";
+        return new Response(JSON.stringify({ data: [{ title: "Doc", url: "https://x.com", description: "snip" }] }), { status: 200 });
+      }
+      return new Response("", { status: 404 });
+    }) as unknown as typeof fetch;
+    const web = createWebClient({ jinaApiKey: "jina_test", fetchImpl });
+    const r = await web.search("hi");
+    expect(r).toEqual([{ title: "Doc", url: "https://x.com", snippet: "snip" }]);
+    expect(sawAuth).toBe(true);
+  });
 });
 
 describe("createWebClient.scrape (reader)", () => {

@@ -34,6 +34,7 @@ const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
 const DDG = "https://html.duckduckgo.com/html/";
 const READER = "https://r.jina.ai/";
+const JINA_SEARCH = "https://s.jina.ai/";
 
 /** Decode DuckDuckGo's `//duckduckgo.com/l/?uddg=<encoded>` redirect to the real URL. */
 function resolveDdgHref(href: string): string {
@@ -82,6 +83,23 @@ export function createWebClient(deps: WebClientDeps = {}): WebClient {
     async search(query: string): Promise<readonly WebSearchResult[]> {
       const q = query.trim();
       if (!q) return [];
+
+      // With a Jina key, search via Jina (keyed → no per-IP burst limit, returns
+      // JSON). Keyless falls back to scraping DuckDuckGo's HTML endpoint.
+      if (deps.jinaApiKey) {
+        const res = await get(`${JINA_SEARCH}?q=${encodeURIComponent(q)}`, "application/json", {
+          Authorization: `Bearer ${deps.jinaApiKey}`,
+        });
+        if (!res.ok) throw new Error(`search failed (${res.status})`);
+        const body = (await res.json()) as { data?: { title?: string; url?: string; description?: string; content?: string }[] };
+        const docs = Array.isArray(body.data) ? body.data : [];
+        return docs.slice(0, maxResults).map((d) => ({
+          title: (d.title ?? d.url ?? "Untitled").slice(0, 300),
+          url: d.url ?? "",
+          snippet: (d.description ?? d.content ?? "").replace(/\s+/g, " ").trim().slice(0, 500),
+        }));
+      }
+
       const res = await get(`${DDG}?q=${encodeURIComponent(q)}`, "text/html");
       if (!res.ok) throw new Error(`search failed (${res.status})`);
       const html = await res.text();
