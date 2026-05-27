@@ -460,7 +460,7 @@ export function App() {
             <div className="stream">
               <div className="stream__inner">
                 {messages.map((m) => (
-                  <Message key={m.id} m={m} onOpenRaw={openRaw} pending={pending} resolvedPerms={resolvedPerms} onDecide={(r) => pending?.resolve(r)} cap={cost.capCents} session={cost.sessionCents} />
+                  <Message key={m.id} m={m} onOpenRaw={openRaw} rawStore={rawStore.current} pending={pending} resolvedPerms={resolvedPerms} onDecide={(r) => pending?.resolve(r)} cap={cost.capCents} session={cost.sessionCents} />
                 ))}
               </div>
             </div>
@@ -504,6 +504,7 @@ export function App() {
 interface MessageProps {
   m: ChatMessage;
   onOpenRaw: (id: string) => void;
+  rawStore: Map<string, unknown>;
   pending: Pending | null;
   resolvedPerms: Record<string, "approved" | "skipped">;
   onDecide: (r: PermissionResponse) => void;
@@ -511,7 +512,7 @@ interface MessageProps {
   session: number;
 }
 
-function Message({ m, onOpenRaw, pending, resolvedPerms, onDecide, cap, session }: MessageProps) {
+function Message({ m, onOpenRaw, rawStore, pending, resolvedPerms, onDecide, cap, session }: MessageProps) {
   if (m.role === "user") {
     return (
       <div className="msg msg--user">
@@ -526,7 +527,7 @@ function Message({ m, onOpenRaw, pending, resolvedPerms, onDecide, cap, session 
       <div className="msg__role">Ortha</div>
       <div className="msg__body">
         {m.steps.map((s: TraceStep) => (
-          <TraceBlock key={s.stepId} step={s} onOpenRaw={onOpenRaw} />
+          <TraceBlock key={s.stepId} step={s} onOpenRaw={onOpenRaw} raw={s.requestId ? rawStore.get(s.requestId) : undefined} />
         ))}
         {Object.entries(resolvedPerms).map(([stepId, outcome]) => (
           <ApprovalChip key={`r_${stepId}`} stepId={stepId} estCents={0} sessionCents={session} capCents={cap} resolved={outcome} onDecide={onDecide} />
