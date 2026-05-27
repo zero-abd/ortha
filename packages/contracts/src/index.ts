@@ -7,6 +7,7 @@ export * from "./domain.js";
 export * from "./orthogonal.js";
 export * from "./web.js";
 export * from "./llm.js";
+export * from "./models.js";
 export * from "./budget.js";
 export * from "./memory.js";
 export * from "./store.js";

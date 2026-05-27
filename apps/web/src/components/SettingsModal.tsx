@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { deleteKey, getSettings, getUsage, listKeys, putKey, putSettings, type ApiSettings, type KeyMeta, type UsageData } from "../lib/api.ts";
 import type { AuthUser } from "../lib/auth.ts";
-import { PROVIDERS, defaultModelOf, providerOfModel } from "../lib/providers.ts";
+import { PROVIDERS, defaultModelOf, modelInfo, modelsForProvider, providerOfModel } from "../lib/providers.ts";
+import { DEFAULT_MODEL_ID } from "@ortha/contracts";
 import { Dropdown } from "./Dropdown.tsx";
 
 const KEY_PROVIDERS = [
@@ -16,7 +17,7 @@ const DEFAULTS: ApiSettings = {
   sessionCapCents: 500,
   perCallWarnCents: 25,
   monthlyCapCents: 10_000,
-  model: "gemini-3-flash-preview",
+  model: DEFAULT_MODEL_ID,
   theme: "system",
   cacheTtlSeconds: 300,
 };
@@ -166,7 +167,7 @@ export function SettingsModal({ open, onClose, onSaved, user, onSignOut }: Props
             {tab === "defaults" && (
               <>
                 <div className="settings__section">
-                  <span className="settings__label">Model &amp; provider</span>
+                  <span className="settings__label">Provider &amp; model</span>
                   <Dropdown
                     value={currentProvider}
                     options={PROVIDERS.map((p) => ({ value: p.id, label: p.label }))}
@@ -174,7 +175,18 @@ export function SettingsModal({ open, onClose, onSaved, user, onSignOut }: Props
                     ariaLabel="Provider"
                     block
                   />
-                  <span className="settings__help">Default model: <span className="mono">{defaultModelOf(currentProvider)}</span></span>
+                  <div style={{ marginTop: 8 }}>
+                    <Dropdown
+                      value={settings.model}
+                      options={modelsForProvider(currentProvider).map((m) => ({ value: m.id, label: m.displayName + (m.free ? "" : " · paid") }))}
+                      onChange={(v) => setSettings((s) => ({ ...s, model: v }))}
+                      ariaLabel="Model"
+                      block
+                    />
+                  </div>
+                  <span className="settings__help">
+                    Using <span className="mono">{modelInfo(settings.model)?.displayName ?? settings.model}</span>. Switch to a Pro model here when you need more capability. Saved per account (syncs across devices).
+                  </span>
                 </div>
                 <div className="settings__divider" />
                 <div className="settings__section">

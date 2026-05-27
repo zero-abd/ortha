@@ -1,88 +1,10 @@
-// Curated model registry. Prices are integer cents per ONE MILLION tokens
-// (matching ModelInfo.inputPerMTokensCents / outputPerMTokensCents — Cents is an
-// integer-cent unit). Free-tier, tool-capable models are flagged `free: true`;
-// the default model id is the cheapest free tool-capable one so dev/eval routing
-// costs nothing while still exercising the tool path.
-import type { ModelInfo, ModelRegistry } from "@ortha/contracts";
+// The model registry is now a thin consumer of the single source of truth:
+// `MODEL_CATALOG` + `DEFAULT_MODEL_ID` live in @ortha/contracts/models. Add or
+// rename a model THERE, not here. This file only turns that catalog into a
+// queryable registry (list/get/default) and lets tests inject a custom list.
+import { DEFAULT_MODEL_ID, MODEL_CATALOG, type ModelInfo, type ModelRegistry } from "@ortha/contracts";
 
-// Approximate public list prices, rounded to whole cents per million tokens.
-// (e.g. $3.00 / Mtok input -> 300 cents). Kept conservative & easy to update.
-const MODELS: readonly ModelInfo[] = [
-  // --- Gemini (OpenAI-compat). Tool-capable. 3-series only (no 2.5). ---
-  {
-    id: "gemini-3-flash-preview",
-    provider: "gemini",
-    displayName: "Gemini 3 Flash",
-    inputPerMTokensCents: 30, // ~$0.30 / Mtok (approx; update at GA)
-    outputPerMTokensCents: 250, // ~$2.50 / Mtok
-    supportsToolUse: true,
-    free: true,
-  },
-  {
-    // gemini-3-pro / gemini-3-pro-preview are retired (404); gemini-3.1-pro-preview
-    // is the live 3-series Pro. Previews get retired — revisit if this 404s.
-    id: "gemini-3.1-pro-preview",
-    provider: "gemini",
-    displayName: "Gemini 3 Pro",
-    inputPerMTokensCents: 200, // ~$2.00 / Mtok (approx; update when GA pricing lands)
-    outputPerMTokensCents: 1200, // ~$12.00 / Mtok
-    supportsToolUse: true,
-    free: false,
-  },
-
-  // --- Anthropic (native adapter). ---
-  {
-    id: "claude-3-5-sonnet-latest",
-    provider: "anthropic",
-    displayName: "Claude Sonnet",
-    inputPerMTokensCents: 300, // ~$3.00 / Mtok
-    outputPerMTokensCents: 1500, // ~$15.00 / Mtok
-    supportsToolUse: true,
-    free: false,
-  },
-  {
-    id: "claude-3-5-haiku-latest",
-    provider: "anthropic",
-    displayName: "Claude Haiku",
-    inputPerMTokensCents: 80, // ~$0.80 / Mtok
-    outputPerMTokensCents: 400, // ~$4.00 / Mtok
-    supportsToolUse: true,
-    free: false,
-  },
-
-  // --- OpenAI (OpenAI-compat adapter). ---
-  {
-    id: "gpt-4o",
-    provider: "openai",
-    displayName: "GPT-4o",
-    inputPerMTokensCents: 250, // ~$2.50 / Mtok
-    outputPerMTokensCents: 1000, // ~$10.00 / Mtok
-    supportsToolUse: true,
-    free: false,
-  },
-  {
-    id: "gpt-4o-mini",
-    provider: "openai",
-    displayName: "GPT-4o mini",
-    inputPerMTokensCents: 15, // ~$0.15 / Mtok
-    outputPerMTokensCents: 60, // ~$0.60 / Mtok
-    supportsToolUse: true,
-    free: false,
-  },
-
-  // --- OpenRouter (OpenAI-compat adapter). A free, tool-capable route. ---
-  {
-    id: "meta-llama/llama-3.3-70b-instruct:free",
-    provider: "openrouter",
-    displayName: "Llama 3.3 70B (free)",
-    inputPerMTokensCents: 0,
-    outputPerMTokensCents: 0,
-    supportsToolUse: true,
-    free: true,
-  },
-];
-
-const DEFAULT_MODEL_ID = "gemini-3-flash-preview";
+const MODELS: readonly ModelInfo[] = MODEL_CATALOG;
 
 export interface CreateModelRegistryOptions {
   /** Replace the curated list entirely (advanced / testing). */

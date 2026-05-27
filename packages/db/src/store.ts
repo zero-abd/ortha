@@ -27,7 +27,7 @@ import type {
   ToolCallStatus,
   WorkspaceId,
 } from "@ortha/contracts";
-import { SettingsSchema } from "@ortha/contracts";
+import { DEFAULT_MODEL_ID, SettingsSchema } from "@ortha/contracts";
 import type { SqlDb, SqlParam, SqlRow } from "./sql.js";
 
 /** Default settings for a workspace that has never saved any. */
@@ -35,7 +35,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sessionCapCents: 500,
   perCallWarnCents: 25,
   monthlyCapCents: 10_000,
-  model: "gemini-3-flash-preview",
+  model: DEFAULT_MODEL_ID,
   theme: "system",
   cacheTtlSeconds: 300,
 };
