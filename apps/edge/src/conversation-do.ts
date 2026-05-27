@@ -64,6 +64,16 @@ export class ConversationDO implements DurableObject {
     const nameMatch = url.pathname.match(/\/conversations\/([^/]+)\//);
     if (nameMatch?.[1]) this.conversationId = asConversationId(decodeURIComponent(nameMatch[1]));
     if (request.headers.get("Upgrade") !== "websocket") {
+      // Internal delete signal from the Worker (`DELETE /api/conversations/:id`):
+      // wipe this conversation's stored messages. Authorization happened in the
+      // Worker (validated session + workspace); this DO is addressed only by id, so
+      // there's no per-message workspace check to do here: the whole DO is the
+      // conversation. Best-effort: errors are swallowed, the KV index removal is
+      // what makes the conversation disappear from the sidebar.
+      if (request.method === "POST" && url.searchParams.get("action") === "delete") {
+        await this.clearStoredData().catch(() => {});
+        return Response.json({ ok: true });
+      }
       return Response.json({ ok: true, durableObject: "ConversationDO", id: this.ctx.id.toString() });
     }
     const pair = new WebSocketPair();
@@ -158,6 +168,24 @@ export class ConversationDO implements DurableObject {
     list.sort((a, b) => b.updatedAt - a.updatedAt);
     if (list.length > 50) list = list.slice(0, 50);
     await this.env.KV.put(key, JSON.stringify(list));
+  }
+
+  /**
+   * Wipe every row this conversation owns from the DO's SQLite. One DO instance maps
+   * to exactly one conversation, so clearing these tables removes all of its data:
+   * the chat transcript (messages), tool-call plumbing, the write-once journal,
+   * context summaries, and the cross-turn raw-result blobs. Idempotent: running it
+   * against an empty/never-initialized DO is a no-op.
+   */
+  private async clearStoredData(): Promise<void> {
+    await this.init();
+    for (const table of ["messages", "tool_calls", "call_journal", "summaries", "raw_blobs"]) {
+      try {
+        this.db.run(`DELETE FROM ${table}`);
+      } catch {
+        /* table may not exist yet; ignore */
+      }
+    }
   }
 
   /** Read the workspace's monthly cap from KV settings (same key buildLivePorts uses). */

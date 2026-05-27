@@ -7,6 +7,13 @@ import { CORS, json } from "./http.js";
 // The DO class must be exported from the Worker entry for the binding to resolve.
 export { ConversationDO };
 
+/** One row of the per-workspace conversation index stored in KV (`conv-index:<ws>`). */
+interface ConvIndexEntry {
+  id: string;
+  title: string;
+  updatedAt: number;
+}
+
 /**
  * Edge API Worker. Thin: auth + routing. Conversation work (the WebSocket /stream
  * upgrade + the agent loop) is delegated to the per-conversation Durable Object.
@@ -47,6 +54,46 @@ export default {
     if (url.pathname === "/api/conversations" && request.method === "GET") {
       const raw = await env.KV.get(`conv-index:${session.workspaceId}`);
       return json({ conversations: raw ? JSON.parse(raw) : [] });
+    }
+
+    // Rename / delete a single conversation. The KV index (keyed by the validated
+    // session's workspace) is the source of truth for the sidebar list, so both
+    // operations mutate it directly here.
+    const single = url.pathname.match(/^\/api\/conversations\/([^/]+)$/);
+    if (single && (request.method === "PATCH" || request.method === "DELETE")) {
+      const id = decodeURIComponent(single[1]!);
+      const key = `conv-index:${session.workspaceId}`;
+      let list: ConvIndexEntry[] = [];
+      try {
+        const raw = await env.KV.get(key);
+        if (raw) list = JSON.parse(raw) as ConvIndexEntry[];
+      } catch {
+        /* treat a corrupt index as empty */
+      }
+
+      if (request.method === "PATCH") {
+        const body = (await request.json().catch(() => null)) as { title?: unknown } | null;
+        const title = typeof body?.title === "string" ? body.title.trim() : "";
+        if (!title) return json({ error: "title is required" }, 400);
+        const next = list.map((c) => (c.id === id ? { ...c, title: title.slice(0, 200) } : c));
+        await env.KV.put(key, JSON.stringify(next));
+        return json({ ok: true });
+      }
+
+      // DELETE: drop the entry from the index, then best-effort wipe the DO's stored
+      // messages so deleted conversations leave no data behind. We forward an
+      // internal `?action=delete` (non-WebSocket) fetch to the same-named DO, which
+      // clears its conversation-scoped SQLite rows. If that forward fails the DO is
+      // simply orphaned (harmless): the sidebar only ever reads the KV index.
+      const next = list.filter((c) => c.id !== id);
+      await env.KV.put(key, JSON.stringify(next));
+      try {
+        const stub = env.CONVERSATION_DO.get(env.CONVERSATION_DO.idFromName(id));
+        await stub.fetch(`https://do/api/conversations/${encodeURIComponent(id)}/?action=delete`, { method: "POST" });
+      } catch {
+        /* orphaned DO is harmless */
+      }
+      return json({ ok: true });
     }
 
     // Mint a conversation id; the DO is created lazily on first /stream connect.
