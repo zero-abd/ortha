@@ -34,6 +34,8 @@ export interface ChatMessage {
   error?: { code: string; message: string };
   /** Data URLs for images attached to a user message (vision input). */
   images?: string[];
+  /** Names of text files attached to a user message (shown as chips). */
+  attachmentNames?: string[];
 }
 
 export interface CostState {

@@ -13,7 +13,9 @@ import { SideEffectModal } from "./components/SideEffectModal.tsx";
 import { SkillsModal } from "./components/SkillsModal.tsx";
 import { BatchModal } from "./components/BatchModal.tsx";
 import { collectRow, type RowResult } from "./lib/batch.ts";
+import { type Attachment, buildPromptWithAttachments, isTextFile } from "./lib/attachments.ts";
 import { TraceBlock } from "./components/TraceBlock.tsx";
+import { Sources } from "./components/Sources.tsx";
 import { useTheme } from "./lib/useTheme.ts";
 import { runTurn } from "./transport.ts";
 import { fetchHistory } from "./live.ts";
@@ -23,6 +25,7 @@ import { API } from "./lib/config.ts";
 import { deleteConversation, getSettings, listConversations, putSettings, renameConversation, type ApiSettings, type Conversation } from "./lib/api.ts";
 import { PROVIDERS, defaultModelOf, providerOfModel } from "./lib/providers.ts";
 import { runCommand, type Command, type CommandContext } from "./lib/commands.ts";
+import { wrapResearch } from "./lib/research.ts";
 import type { AgentRun, ChatMessage, CostState, RawArtifact, TraceStep } from "./types.ts";
 import { AgentsPanel } from "./components/AgentsPanel.tsx";
 import { applyTraceEventToRun, finishRun, newAgentRun } from "./lib/agentRuns.ts";
@@ -70,6 +73,12 @@ export function App() {
   const [draft, setDraft] = useState("");
   // Data URLs for images attached to the next message (vision input).
   const [attached, setAttached] = useState<string[]>([]);
+  // Text-document attachments for the next message. Their contents ride in the
+  // prompt (see `send`); the chat bubble stays clean (original text + a chip).
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  // Deep-research mode: when on, the turn gets a research-directive-wrapped
+  // prompt while the chat bubble still shows the user's original text.
+  const [deepResearch, setDeepResearch] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [discoverOpen, setDiscoverOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
@@ -235,20 +244,35 @@ export function App() {
       // Images default to whatever is attached in the composer; example cards and
       // commands call send(text) with no images and behave exactly as before.
       const images = imageArg ?? attached;
-      // Allow an image-only message (no text) so a user can just ask "what's this?".
-      if ((!text.trim() && images.length === 0) || running) return;
+      const files = attachments;
+      // Allow an image- or file-only message (no text), e.g. "what's in this?".
+      if ((!text.trim() && images.length === 0 && files.length === 0) || running) return;
+      // The bubble shows the ORIGINAL text (+ image thumbnails / a 📎 file chip). The
+      // model gets file contents prepended, then wrapped with the research directive
+      // when deep-research is on; images ride alongside as vision input.
+      let turnText = files.length > 0 ? buildPromptWithAttachments(text, files) : text;
+      if (deepResearch) turnText = wrapResearch(turnText);
       setDraft("");
       setAttached([]);
+      setAttachments([]);
       stepApi.current = {};
       setMessages((prev) => [
         ...prev,
-        { id: `u_${Date.now()}`, role: "user", content: text, steps: [], streaming: false, ...(images.length > 0 ? { images } : {}) },
+        {
+          id: `u_${Date.now()}`,
+          role: "user",
+          content: text,
+          steps: [],
+          streaming: false,
+          ...(images.length > 0 ? { images } : {}),
+          ...(files.length > 0 ? { attachmentNames: files.map((f) => f.name) } : {}),
+        },
         { id: `a_${Date.now()}`, role: "assistant", content: "", steps: [], streaming: true },
       ]);
       setRunning(true);
-      const runId = startAgentRun(text, "chat");
+      const runId = startAgentRun(text || files.map((f) => f.name).join(", "), "chat");
       try {
-        await runTurn(text, {
+        await runTurn(turnText, {
           onEvent: (e) => {
             if (e.type === "tool_call_started") stepApi.current[e.stepId] = e.api;
             onEvent(e);
@@ -270,7 +294,7 @@ export function App() {
         refreshConversations();
       }
     },
-    [running, attached, onEvent, requestPermission, cost.sessionCents, cost.capCents, activeId, refreshConversations, patchActive, startAgentRun, pushAgentEvent, finishAgentRun],
+    [running, attached, attachments, deepResearch, onEvent, requestPermission, cost.sessionCents, cost.capCents, activeId, refreshConversations, patchActive, startAgentRun, pushAgentEvent, finishAgentRun],
   );
 
   // Run one batch row as an isolated turn: a fresh conversation id (so rows run
@@ -587,7 +611,7 @@ export function App() {
               <h1 className="welcome__title">Welcome to Ortha</h1>
               <p className="welcome__sub">Describe what you need — Ortha discovers the right tools and runs them.</p>
               <div style={{ width: "100%", maxWidth: 720 }}>
-                <AskBox value={draft} onChange={setDraft} onSend={() => send(draft)} onCommand={onCommand} disabled={running} autoFocus attached={attached} onAttach={setAttached} />
+                <AskBox value={draft} onChange={setDraft} onSend={() => send(draft)} onCommand={onCommand} disabled={running} attached={attached} onAttach={setAttached} attachments={attachments} onAttachmentsChange={setAttachments} deepResearch={deepResearch} onToggleDeepResearch={() => setDeepResearch((v) => !v)} autoFocus />
               </div>
               <div className="cats">
                 {EXAMPLE_CATS.map((c) => (
@@ -613,7 +637,7 @@ export function App() {
               </div>
             </div>
             <div className="composer">
-              <AskBox value={draft} onChange={setDraft} onSend={() => send(draft)} onCommand={onCommand} disabled={running} attached={attached} onAttach={setAttached} />
+              <AskBox value={draft} onChange={setDraft} onSend={() => send(draft)} onCommand={onCommand} disabled={running} attached={attached} onAttach={setAttached} attachments={attachments} onAttachmentsChange={setAttachments} deepResearch={deepResearch} onToggleDeepResearch={() => setDeepResearch((v) => !v)} />
             </div>
           </div>
         )}
@@ -687,6 +711,16 @@ function Message({ m, onOpenRaw, rawStore, pending, resolvedPerms, onDecide, cap
           )}
           {m.content}
         </div>
+        {m.attachmentNames && m.attachmentNames.length > 0 && (
+          <div className="msg__attachments">
+            {m.attachmentNames.map((name) => (
+              <span key={name} className="filechip filechip--sent" title={name}>
+                <span className="filechip__icon" aria-hidden="true">📎</span>
+                <span className="filechip__name">{name}</span>
+              </span>
+            ))}
+          </div>
+        )}
       </div>
     );
   }
@@ -705,6 +739,7 @@ function Message({ m, onOpenRaw, rawStore, pending, resolvedPerms, onDecide, cap
           <ApprovalChip stepId={pending.event.stepId} estCents={pending.event.estCents} sessionCents={pending.event.sessionCents} capCents={pending.event.capCents} dynamic={pending.event.dynamic} onDecide={onDecide} />
         )}
         {m.content && <div className="md">{m.content}</div>}
+        <Sources steps={m.steps} />
         {m.streaming && !m.content && m.steps.length === 0 && (
           <div className="thinking">
             <Spinner size={16} />
@@ -735,12 +770,19 @@ function readImageDataUrl(file: File): Promise<string> {
   });
 }
 
+// Each attached file is capped at ~200KB read client-side.
+const MAX_ATTACH_BYTES = 200 * 1024;
+
 function AskBox({
   value,
   onChange,
   onSend,
   onCommand,
   disabled,
+  attachments,
+  onAttachmentsChange,
+  deepResearch,
+  onToggleDeepResearch,
   autoFocus,
   attached = [],
   onAttach,
@@ -750,6 +792,10 @@ function AskBox({
   onSend: () => void;
   onCommand?: (cmd: Command, arg: string) => void;
   disabled: boolean;
+  attachments?: Attachment[];
+  onAttachmentsChange?: (files: Attachment[]) => void;
+  deepResearch?: boolean;
+  onToggleDeepResearch?: () => void;
   autoFocus?: boolean;
   attached?: string[];
   onAttach?: (images: string[]) => void;
@@ -760,6 +806,11 @@ function AskBox({
   const slashOpen = onCommand != null && value.startsWith("/");
   const navRef = useRef<SlashNav | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
+
+  const files = attachments ?? [];
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  // Inline notice when a non-text / too-large file is rejected.
+  const [attachNotice, setAttachNotice] = useState<string | null>(null);
 
   const runActive = () => {
     const nav = navRef.current;
@@ -791,6 +842,48 @@ function AskBox({
 
   const removeImage = (idx: number) => onAttach?.(attached.filter((_, i) => i !== idx));
 
+  // Read selected files client-side. Text files (by mime/extension) within the
+  // size cap are kept as {name, content}; anything else shows a friendly notice.
+  const onFilesPicked = (list: FileList | null) => {
+    if (!list || !onAttachmentsChange) return;
+    setAttachNotice(null);
+    const picked = Array.from(list);
+    const added: Attachment[] = [];
+    let pending = picked.length;
+    const finish = () => {
+      pending -= 1;
+      if (pending === 0 && added.length > 0) {
+        onAttachmentsChange([...(attachments ?? []), ...added]);
+      }
+    };
+    for (const file of picked) {
+      if (!isTextFile(file.name, file.type)) {
+        setAttachNotice(`"${file.name}" isn't supported — text files only for now.`);
+        finish();
+        continue;
+      }
+      if (file.size > MAX_ATTACH_BYTES) {
+        setAttachNotice(`"${file.name}" is too large (max 200KB).`);
+        finish();
+        continue;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        added.push({ name: file.name, content: typeof reader.result === "string" ? reader.result : "" });
+        finish();
+      };
+      reader.onerror = () => {
+        setAttachNotice(`Couldn't read "${file.name}".`);
+        finish();
+      };
+      reader.readAsText(file);
+    }
+  };
+
+  const removeAttachment = (name: string) => {
+    onAttachmentsChange?.(files.filter((f) => f.name !== name));
+  };
+
   return (
     <div className="ask-wrap">
       {slashOpen && (
@@ -819,6 +912,25 @@ function AskBox({
           ))}
         </div>
       )}
+      {onAttachmentsChange && (files.length > 0 || attachNotice) && (
+        <div className="attach-tray">
+          {files.map((f) => (
+            <span key={f.name} className="filechip" title={f.name}>
+              <span className="filechip__icon" aria-hidden="true">📎</span>
+              <span className="filechip__name">{f.name}</span>
+              <button
+                type="button"
+                className="filechip__remove"
+                aria-label={`Remove ${f.name}`}
+                onClick={() => removeAttachment(f.name)}
+              >
+                &times;
+              </button>
+            </span>
+          ))}
+          {attachNotice && <span className="attach-notice">{attachNotice}</span>}
+        </div>
+      )}
       <div className="ask">
         {onAttach && (
           <>
@@ -844,6 +956,30 @@ function AskBox({
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
               </svg>
+            </button>
+          </>
+        )}
+        {onAttachmentsChange && (
+          <>
+            <input
+              ref={fileInputRef}
+              type="file"
+              className="attach-input"
+              multiple
+              accept="text/*,.txt,.text,.md,.markdown,.rst,.log,.csv,.tsv,.json,.jsonl,.ndjson,.yaml,.yml,.toml,.ini,.env,.xml,.html,.htm,.css,.scss,.svg,.ts,.tsx,.js,.jsx,.mjs,.cjs,.py,.rb,.go,.rs,.java,.kt,.c,.h,.cc,.cpp,.hpp,.cs,.php,.swift,.sh,.bash,.zsh,.sql,.graphql,.gql,.vue,.svelte"
+              onChange={(e) => {
+                onFilesPicked(e.target.files);
+                e.target.value = "";
+              }}
+            />
+            <button
+              type="button"
+              className="ask__attach"
+              aria-label="Attach a text file"
+              title="Attach a text file"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              📎
             </button>
           </>
         )}
@@ -879,6 +1015,21 @@ function AskBox({
             }
           }}
         />
+        {onToggleDeepResearch && (
+          <button
+            type="button"
+            className={`research-toggle${deepResearch ? " research-toggle--on" : ""}`}
+            onClick={onToggleDeepResearch}
+            aria-pressed={!!deepResearch}
+            title={deepResearch ? "Deep research is on — Ortha will research across multiple sources" : "Deep research off"}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="11" cy="11" r="7" />
+              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+            <span>Deep research</span>
+          </button>
+        )}
         <button className="ask__send" onClick={onSend} disabled={disabled} aria-label="Send">↑</button>
       </div>
     </div>

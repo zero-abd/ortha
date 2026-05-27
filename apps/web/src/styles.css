@@ -161,6 +161,13 @@ input, textarea, select { font: inherit; color: inherit; }
 .ask__send:hover { opacity: 0.9; }
 .ask__send:disabled { opacity: 0.4; cursor: default; }
 
+/* Deep-research toggle: a compact pill beside the send button. Off = quiet
+   hairline; on = filled accent so the active state reads clearly. */
+.research-toggle { display: inline-flex; align-items: center; gap: 6px; flex: none; height: 34px; padding: 0 12px; border: 1px solid var(--hairline-strong); border-radius: var(--radius-pill); background: var(--surface); color: var(--muted); font-size: 12.5px; font-weight: 500; white-space: nowrap; transition: background 0.12s, border-color 0.12s, color 0.12s; }
+.research-toggle:hover { background: var(--hover); border-color: var(--ink-soft); color: var(--ink); }
+.research-toggle--on { background: var(--accent); border-color: var(--accent); color: #ffffff; }
+.research-toggle--on:hover { background: var(--accent); border-color: var(--accent); color: #ffffff; opacity: 0.92; }
+
 /* ── Agent-trace block ─────────────────────────────────────────────────── */
 .trace { border: 1px solid var(--hairline); border-radius: var(--radius-sm); background: var(--surface); margin: 4px 0; overflow: hidden; }
 .trace__line { display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 12px; text-align: left; font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); }
@@ -173,6 +180,15 @@ input, textarea, select { font: inherit; color: inherit; }
 .trace__detail { padding: 0 12px 11px 34px; font-size: 13px; color: var(--muted); display: flex; flex-direction: column; gap: 6px; }
 .trace__result-row { color: var(--ink-soft); }
 .trace__heal { padding: 0 12px 10px 34px; font-family: var(--font-mono); font-size: 12px; color: var(--warn); }
+
+/* ── Sources (web pages the agent read, under an assistant answer) ─────── */
+.sources { display: flex; flex-direction: column; gap: 7px; margin: 12px 0 2px; }
+.sources__label { font-size: 11.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--faint); }
+.sources__list { display: flex; flex-wrap: wrap; gap: 7px; list-style: none; margin: 0; padding: 0; }
+.sources__chip { display: inline-flex; align-items: center; gap: 7px; max-width: 280px; padding: 4px 11px; border: 1px solid var(--hairline); border-radius: var(--radius-pill); background: var(--surface); color: var(--ink-soft); font-size: 12.5px; transition: background 0.12s, border-color 0.12s, color 0.12s; }
+.sources__chip:hover { background: var(--hover); border-color: var(--hairline-strong); color: var(--ink); }
+.sources__favicon { flex: none; width: 14px; height: 14px; border-radius: 3px; }
+.sources__domain { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ── Structured result card (tool output as record / table) ────────────── */
 .rcard { border: 1px solid var(--hairline); border-radius: var(--radius-sm); background: var(--surface); overflow: hidden; }
@@ -486,3 +502,17 @@ input:focus, textarea:focus { outline: none; border-color: var(--ink-soft); }
   .settings__tab { white-space: nowrap; padding: 7px 12px; }
   .settings__content { padding: 16px; }
 }
+
+/* ── File attachments (text documents) ─────────────────────────────────── */
+.attach-input { display: none; }
+.ask__attach { width: 34px; height: 34px; flex: none; align-self: flex-end; border-radius: var(--radius-sm); color: var(--muted); display: flex; align-items: center; justify-content: center; font-size: 15px; transition: background 0.12s, color 0.12s; }
+.ask__attach:hover { background: var(--hover); color: var(--ink-soft); }
+.attach-tray { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; max-width: 720px; margin: 0 auto 8px; }
+.attach-notice { font-size: 12.5px; color: var(--danger); }
+.filechip { display: inline-flex; align-items: center; gap: 6px; max-width: 240px; padding: 4px 6px 4px 9px; border: 1px solid var(--hairline-strong); border-radius: var(--radius-pill); background: var(--surface); color: var(--ink-soft); font-size: 12.5px; }
+.filechip__icon { font-size: 12px; line-height: 1; }
+.filechip__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.filechip__remove { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; flex: none; border-radius: var(--radius-pill); color: var(--muted); font-size: 14px; line-height: 1; transition: background 0.12s, color 0.12s; }
+.filechip__remove:hover { background: var(--hover); color: var(--ink); }
+.msg__attachments { display: flex; flex-wrap: wrap; align-self: flex-start; gap: 6px; }
+.filechip--sent { background: var(--hover); }
