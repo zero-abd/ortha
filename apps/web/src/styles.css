@@ -138,7 +138,104 @@ input, textarea, select { font: inherit; color: inherit; }
 .msg__role { font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--faint); }
 .msg__body { font-size: 15px; color: var(--ink); }
 .msg--user .msg__body { align-self: flex-start; background: var(--hover); border: 1px solid var(--hairline); border-radius: 4px 12px 12px 12px; padding: 10px 14px; }
-.md { white-space: pre-wrap; }
+
+/* ── Assistant markdown (ChatGPT/Claude-style prose) ───────────────────────
+   Scoped under .md so it only affects rendered assistant answers. GFM single
+   newlines collapse (correct), so vertical rhythm comes from block margins. */
+.md { color: var(--ink); font-size: 15px; line-height: 1.6; overflow-wrap: anywhere; word-break: break-word; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+
+.md p { margin: 0 0 12px; }
+.md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { margin: 22px 0 10px; font-weight: 600; line-height: 1.3; letter-spacing: -0.01em; color: var(--ink); }
+.md h1 { font-size: 1.5em; padding-bottom: 0.3em; border-bottom: 1px solid var(--hairline); }
+.md h2 { font-size: 1.3em; padding-bottom: 0.25em; border-bottom: 1px solid var(--hairline); }
+.md h3 { font-size: 1.15em; }
+.md h4 { font-size: 1.02em; }
+.md h5, .md h6 { font-size: 0.95em; color: var(--ink-soft); }
+.md a { color: var(--accent); text-decoration: none; }
+.md a:hover { text-decoration: underline; }
+.md strong { font-weight: 600; }
+.md em { font-style: italic; }
+.md del { color: var(--muted); }
+
+/* Lists — ordered, unordered, and nested. */
+.md ul, .md ol { margin: 0 0 12px; padding-left: 1.5em; }
+.md li { margin: 4px 0; }
+.md li > p { margin: 0 0 6px; }
+.md li > ul, .md li > ol { margin: 4px 0 4px; }
+.md ul { list-style: disc; }
+.md ul ul { list-style: circle; }
+.md ul ul ul { list-style: square; }
+.md ol { list-style: decimal; }
+
+/* GFM task lists. */
+.md li.task-list-item { list-style: none; margin-left: -1.4em; padding-left: 1.4em; }
+.md li.task-list-item input[type="checkbox"] { margin: 0 7px 0 0; vertical-align: -1px; accent-color: var(--accent); }
+
+/* Blockquote. */
+.md blockquote { margin: 0 0 12px; padding: 2px 14px; border-left: 3px solid var(--hairline-strong); color: var(--ink-soft); }
+.md blockquote > :last-child { margin-bottom: 0; }
+
+.md hr { border: none; border-top: 1px solid var(--hairline); margin: 20px 0; }
+
+.md img { max-width: 100%; border-radius: var(--radius-sm); }
+
+/* Tables — bordered, header shading, zebra rows, horizontal scroll on overflow. */
+.md table { display: block; width: max-content; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: 0 0 14px; font-size: 13.5px; }
+.md thead { background: var(--sidebar); }
+.md th, .md td { padding: 7px 12px; border: 1px solid var(--hairline-strong); text-align: left; vertical-align: top; }
+.md th { font-weight: 600; color: var(--ink-soft); white-space: nowrap; }
+.md tbody tr:nth-child(even) { background: var(--hover); }
+
+/* Inline code. */
+.md-inline-code { font-family: var(--font-mono); font-size: 0.88em; padding: 0.12em 0.4em; border-radius: 5px; background: color-mix(in srgb, var(--ink) 7%, transparent); border: 1px solid var(--hairline); white-space: break-spaces; }
+
+/* Fenced code block: language label + copy button + highlighted body. */
+.md-code { margin: 0 0 14px; border: 1px solid var(--hairline-strong); border-radius: var(--radius-sm); overflow: hidden; background: var(--sidebar); }
+.md-code__bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 5px 8px 5px 12px; border-bottom: 1px solid var(--hairline); background: var(--sidebar); }
+.md-code__lang { font-family: var(--font-mono); font-size: 11.5px; letter-spacing: 0.02em; color: var(--muted); text-transform: lowercase; }
+.md-code__copy { padding: 3px 9px; border: 1px solid var(--hairline-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--ink-soft); font-size: 11.5px; transition: background 0.12s, border-color 0.12s, color 0.12s; }
+.md-code__copy:hover { background: var(--hover); border-color: var(--ink-soft); color: var(--ink); }
+.md-code__pre { margin: 0; padding: 12px 14px; overflow-x: auto; background: var(--surface); }
+.md-code__pre code { font-family: var(--font-mono); font-size: 12.75px; line-height: 1.55; color: var(--ink); background: none; padding: 0; border: none; white-space: pre; }
+
+/* Streaming fallback: if a transient parse throws, show raw text legibly. */
+.md-fallback { white-space: pre-wrap; word-break: break-word; }
+
+/* KaTeX: keep display math from overflowing the bubble. */
+.md .katex-display { overflow-x: auto; overflow-y: hidden; padding: 2px 0; margin: 0 0 12px; }
+
+/* ── highlight.js token colors (GitHub palette), themed by the app ─────────
+   We render tokens with .hljs-* classes via rehype-highlight but ship the
+   theme here so code follows the app's light/dark mode instead of importing
+   a fixed light-only stylesheet. Light = GitHub Light, dark = GitHub Dark. */
+.md .hljs-doctag, .md .hljs-keyword, .md .hljs-meta .hljs-keyword, .md .hljs-template-tag, .md .hljs-template-variable, .md .hljs-type, .md .hljs-variable.language_ { color: #d73a49; }
+.md .hljs-title, .md .hljs-title.class_, .md .hljs-title.class_.inherited__, .md .hljs-title.function_ { color: #6f42c1; }
+.md .hljs-attr, .md .hljs-attribute, .md .hljs-literal, .md .hljs-meta, .md .hljs-number, .md .hljs-operator, .md .hljs-variable, .md .hljs-selector-attr, .md .hljs-selector-class, .md .hljs-selector-id { color: #005cc5; }
+.md .hljs-regexp, .md .hljs-string, .md .hljs-meta .hljs-string { color: #032f62; }
+.md .hljs-built_in, .md .hljs-symbol { color: #e36209; }
+.md .hljs-comment, .md .hljs-code, .md .hljs-formula { color: #6a737d; }
+.md .hljs-name, .md .hljs-quote, .md .hljs-selector-tag, .md .hljs-selector-pseudo { color: #22863a; }
+.md .hljs-subst { color: var(--ink); }
+.md .hljs-section { color: #005cc5; font-weight: 600; }
+.md .hljs-bullet { color: #735c0f; }
+.md .hljs-emphasis { font-style: italic; }
+.md .hljs-strong { font-weight: 600; }
+.md .hljs-addition { color: #22863a; background-color: #f0fff4; }
+.md .hljs-deletion { color: #b31d28; background-color: #ffeef0; }
+
+:root[data-theme="dark"] .md .hljs-doctag, :root[data-theme="dark"] .md .hljs-keyword, :root[data-theme="dark"] .md .hljs-meta .hljs-keyword, :root[data-theme="dark"] .md .hljs-template-tag, :root[data-theme="dark"] .md .hljs-template-variable, :root[data-theme="dark"] .md .hljs-type, :root[data-theme="dark"] .md .hljs-variable.language_ { color: #ff7b72; }
+:root[data-theme="dark"] .md .hljs-title, :root[data-theme="dark"] .md .hljs-title.class_, :root[data-theme="dark"] .md .hljs-title.class_.inherited__, :root[data-theme="dark"] .md .hljs-title.function_ { color: #d2a8ff; }
+:root[data-theme="dark"] .md .hljs-attr, :root[data-theme="dark"] .md .hljs-attribute, :root[data-theme="dark"] .md .hljs-literal, :root[data-theme="dark"] .md .hljs-meta, :root[data-theme="dark"] .md .hljs-number, :root[data-theme="dark"] .md .hljs-operator, :root[data-theme="dark"] .md .hljs-variable, :root[data-theme="dark"] .md .hljs-selector-attr, :root[data-theme="dark"] .md .hljs-selector-class, :root[data-theme="dark"] .md .hljs-selector-id { color: #79c0ff; }
+:root[data-theme="dark"] .md .hljs-regexp, :root[data-theme="dark"] .md .hljs-string, :root[data-theme="dark"] .md .hljs-meta .hljs-string { color: #a5d6ff; }
+:root[data-theme="dark"] .md .hljs-built_in, :root[data-theme="dark"] .md .hljs-symbol { color: #ffa657; }
+:root[data-theme="dark"] .md .hljs-comment, :root[data-theme="dark"] .md .hljs-code, :root[data-theme="dark"] .md .hljs-formula { color: #8b949e; }
+:root[data-theme="dark"] .md .hljs-name, :root[data-theme="dark"] .md .hljs-quote, :root[data-theme="dark"] .md .hljs-selector-tag, :root[data-theme="dark"] .md .hljs-selector-pseudo { color: #7ee787; }
+:root[data-theme="dark"] .md .hljs-section { color: #1f6feb; font-weight: 600; }
+:root[data-theme="dark"] .md .hljs-bullet { color: #f2cc60; }
+:root[data-theme="dark"] .md .hljs-addition { color: #aff5b4; background-color: #033a16; }
+:root[data-theme="dark"] .md .hljs-deletion { color: #ffdcd7; background-color: #67060c; }
 
 /* ── Welcome / first-run ───────────────────────────────────────────────── */
 .welcome { flex: 1; display: flex; flex-direction: column; align-items: center; padding: 7vh 24px 0; }
