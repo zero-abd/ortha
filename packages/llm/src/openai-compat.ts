@@ -22,8 +22,6 @@
 //  - OpenAI streams tool-call arguments as many small fragments — always
 //    accumulate before parsing.
 import {
-  ErrorCode,
-  OrthaError,
   type LLMEvent,
   type LLMMessage,
   type LLMProvider,
@@ -252,12 +250,53 @@ function mapFinishReason(v: string): "end" | "tool_use" | "max_tokens" | "error"
 function parseArgs(json: string): Record<string, unknown> {
   const trimmed = json.trim();
   if (trimmed === "") return {};
+  // Fast path: the whole fragment is one JSON object.
   try {
     const parsed = JSON.parse(trimmed);
-    return isRecord(parsed) ? parsed : {};
+    if (isRecord(parsed)) return parsed;
   } catch {
-    throw new OrthaError(ErrorCode.BAD_REQUEST, `malformed tool-call arguments: ${trimmed.slice(0, 120)}`);
+    /* fall through to recovery */
   }
+  // Gemini's compat layer sometimes concatenates two tool calls' argument objects
+  // into one fragment ({"q":"a"}{"q":"b"}), which isn't valid JSON. Recover the
+  // FIRST balanced object instead of throwing and aborting the whole turn — the
+  // agent's intended call still runs, and a truly-garbage fragment yields {} (the
+  // tool then reports "missing argument" and the loop continues).
+  const first = firstJsonObject(trimmed);
+  return first ?? {};
+}
+
+/** Extract the first balanced top-level JSON object from a string, or null. */
+function firstJsonObject(s: string): Record<string, unknown> | null {
+  let depth = 0;
+  let start = -1;
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === "\\") esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') inStr = true;
+    else if (c === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (c === "}") {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        try {
+          const parsed = JSON.parse(s.slice(start, i + 1));
+          return isRecord(parsed) ? parsed : null;
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
 }
 
 function parseJson(chunk: string): Record<string, unknown> {

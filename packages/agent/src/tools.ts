@@ -11,6 +11,8 @@ export const SEARCH_TOOLS = "search_tools";
 export const GET_TOOL_DETAILS = "get_tool_details";
 export const RUN_TOOL = "run_tool";
 export const EXPAND_RESULT = "expand_result";
+export const WEB_SEARCH = "web_search";
+export const WEB_SCRAPE = "web_scrape";
 
 export const META_TOOLS: readonly ToolSpec[] = [
   {
@@ -77,14 +79,46 @@ export const META_TOOLS: readonly ToolSpec[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: WEB_SEARCH,
+    description:
+      "Search the open web for current, public, or general information. Always available and free — use it for anything not covered by a specialized Orthogonal endpoint (news, facts, who/what/where, finding pages to then read). Returns ranked results with title, url, and snippet.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "What to search the web for." },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: WEB_SCRAPE,
+    description:
+      "Fetch a single web page and read it as clean markdown. Use after web_search (or with a known URL) to read a page's actual contents. Always available and free.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "Absolute http(s) URL of the page to read." },
+      },
+      required: ["url"],
+      additionalProperties: false,
+    },
+  },
 ];
 
 export const SYSTEM_PROMPT = [
-  "You are Ortha, a self-extending assistant. You have no built-in integrations.",
-  "To act on the real world you must discover tools with search_tools, inspect them with",
-  "get_tool_details, then execute them with run_tool. Use expand_result only when a",
-  "distilled summary is insufficient. Prefer the cheapest verified endpoint that answers",
-  "the user.",
+  "You are Ortha, a self-extending assistant with general web access.",
+  "You have two kinds of tools. (1) Always-available, free web tools: web_search (search the",
+  "open web) and web_scrape (read a page as markdown). Use them for current events, general",
+  "facts, finding people/companies/contacts, or anything not covered by a paid endpoint —",
+  "typically web_search first, then web_scrape the most promising results to read them.",
+  "(2) Orthogonal's paid API catalog, discovered at runtime: search_tools to find an endpoint,",
+  "get_tool_details to inspect it, run_tool to execute it (use this for specialized/structured",
+  "data the open web can't give cleanly). Use expand_result only when a distilled summary is",
+  "insufficient. Prefer the cheapest path that answers the user, and prefer the free web tools",
+  "before paid endpoints when either would work. When you use the web, cite the page URLs you",
+  "relied on at the end of your answer.",
   "Act, don't narrate: if you decide to use a tool, emit that tool call in the same",
   "response — never reply with only a description of what you are about to do next. If a",
   "tool's result doesn't fully answer the question, immediately search for and call another",

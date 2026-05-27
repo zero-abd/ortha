@@ -5,3 +5,4 @@ export { createOrthogonalClient, type OrthogonalClientDeps } from "./client.js";
 export { CircuitBreaker, type BreakerState, type CircuitBreakerOptions } from "./breaker.js";
 export { DedupeCache, requestKey, type DedupeCacheOptions } from "./cache.js";
 export { distill, type Distilled } from "./distill.js";
+export { createWebClient, type WebClientDeps } from "./web.js";

@@ -17,6 +17,7 @@ import {
   makeMockBudgetPolicy,
   makeMockMemoryStore,
   makeMockOrthogonalClient,
+  makeMockWebClient,
 } from "@ortha/contracts/mocks";
 import { describe, expect, it, vi } from "vitest";
 import { runAgentTurn, type AgentDeps } from "../src/loop.js";
@@ -46,6 +47,7 @@ function baseDeps(overrides: Partial<AgentDeps> = {}): AgentDeps {
   return {
     llm: makeTurnScriptedLLM([]),
     orthogonal: makeMockOrthogonalClient(),
+    web: makeMockWebClient(),
     budget: makeMockBudgetPolicy(),
     memory: makeMockMemoryStore(),
     model: "gemini-flash",
@@ -479,6 +481,51 @@ describe("runAgentTurn — continue after narrated intent", () => {
     expect(events.filter((e) => e.type === "done")).toHaveLength(1);
     const tokens = events.filter((e) => e.type === "token").map((e) => (e as { text: string }).text).join("");
     expect(tokens).toBe("Patrick Collison is the CEO. Let me know if you want recent news.");
+  });
+});
+
+describe("runAgentTurn — web tools", () => {
+  it("runs web_search (free) and feeds results back, then answers with a citation", async () => {
+    const web = makeMockWebClient({
+      async search() {
+        return [{ title: "Stripe", url: "https://stripe.com/about", snippet: "Stripe is a payments company." }];
+      },
+    });
+    const llm = makeTurnScriptedLLM([
+      [{ type: "tool_call_request", id: "w1", name: "web_search", args: { query: "who is the CEO of Stripe" } }, { type: "done", stopReason: "tool_use" }],
+      [{ type: "token", text: "Patrick Collison. (stripe.com/about)" }, { type: "done", stopReason: "end" }],
+    ]);
+    const events = await collect(baseDeps({ llm, web }));
+    const types = events.map((e) => e.type);
+
+    // Web search shows in the trace as a free step (no budget, no permission).
+    expect(types).toContain("tool_call_started");
+    const started = events.find((e) => e.type === "tool_call_started");
+    expect(started).toMatchObject({ api: "web", estCents: 0 });
+    const result = events.find((e) => e.type === "tool_result");
+    expect(result).toMatchObject({ priceCents: 0, ok: true });
+    expect(events.some((e) => e.type === "permission_required")).toBe(false);
+
+    const answer = events.filter((e) => e.type === "token").map((e) => (e as { text: string }).text).join("");
+    expect(answer).toContain("Patrick Collison");
+    expect(events.at(-1)).toEqual({ type: "done", stopReason: "end" });
+  });
+
+  it("recovers from a web_scrape failure instead of aborting the turn", async () => {
+    const web = makeMockWebClient({
+      async scrape() {
+        throw new Error("could not read https://x.com (403)");
+      },
+    });
+    const llm = makeTurnScriptedLLM([
+      [{ type: "tool_call_request", id: "w1", name: "web_scrape", args: { url: "https://x.com" } }, { type: "done", stopReason: "tool_use" }],
+      [{ type: "token", text: "I couldn't open that page." }, { type: "done", stopReason: "end" }],
+    ]);
+    const events = await collect(baseDeps({ llm, web }));
+    const failed = events.find((e) => e.type === "tool_result" && (e as { ok: boolean }).ok === false);
+    expect(failed).toBeTruthy();
+    expect(events.some((e) => e.type === "error")).toBe(false);
+    expect(events.at(-1)).toEqual({ type: "done", stopReason: "end" });
   });
 });
 

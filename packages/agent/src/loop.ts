@@ -15,6 +15,7 @@ import {
   type SideEffectClass,
   type ToolApi,
   type TraceEvent,
+  type WebClient,
   type WorkspaceId,
 } from "@ortha/contracts";
 import { distill, requestKey } from "@ortha/harness";
@@ -28,6 +29,8 @@ import {
   RUN_TOOL,
   SEARCH_TOOLS,
   SYSTEM_PROMPT,
+  WEB_SCRAPE,
+  WEB_SEARCH,
 } from "./tools.js";
 
 /** Snapshot persisted after every step so a crashed turn can be resumed/audited. */
@@ -40,6 +43,8 @@ export interface AgentState {
 export interface AgentDeps {
   readonly llm: LLMProvider;
   readonly orthogonal: OrthogonalClient;
+  /** Always-on general web access (search + read), executed by the agent for every provider. */
+  readonly web: WebClient;
   readonly budget: BudgetPolicy;
   readonly memory: MemoryStore;
   readonly model: string;
@@ -228,6 +233,10 @@ async function* dispatch(
       return yield* dispatchRun(deps, call, stepId, sessionCents, sideEffects);
     case EXPAND_RESULT:
       return yield* dispatchExpand(deps, call, sessionCents);
+    case WEB_SEARCH:
+      return yield* dispatchWebSearch(deps, call, stepId, sessionCents);
+    case WEB_SCRAPE:
+      return yield* dispatchWebScrape(deps, call, stepId, sessionCents);
     default:
       return { kind: "ok", sessionCents, toolContent: `Unknown tool "${call.name}".` };
   }
@@ -270,6 +279,81 @@ async function* dispatchExpand(
   const raw = await deps.memory.getRaw(asRequestId(requestId));
   const toolContent = raw === null ? `No raw result found for requestId "${requestId}".` : safeJson(raw);
   return { kind: "ok", sessionCents, toolContent };
+}
+
+/** Emit a failed web step + feed the error back so the turn keeps going (free tools). */
+function* webFailed(stepLabel: string, tool: string, startedAt: number, err: unknown, sessionCents: number): Generator<TraceEvent, DispatchResult> {
+  const message = err instanceof Error ? err.message : String(err);
+  yield {
+    type: "tool_result",
+    stepId: stepLabel,
+    requestId: asRequestId(`web_${stepLabel}`),
+    summary: `failed — ${message}`,
+    priceCents: 0,
+    latencyMs: Date.now() - startedAt,
+    ok: false,
+  };
+  return { kind: "ok", sessionCents, toolContent: `${tool} failed: ${message}. Try a different query/URL, or answer with what you already have.` };
+}
+
+async function* dispatchWebSearch(
+  deps: AgentDeps,
+  call: ToolCallRequest,
+  stepId: number,
+  sessionCents: number,
+): AsyncGenerator<TraceEvent, DispatchResult> {
+  const query = asString(call.args["query"]) ?? "";
+  const stepLabel = `step_${stepId}`;
+  if (!query.trim()) return { kind: "ok", sessionCents, toolContent: "web_search requires a non-empty query." };
+  yield { type: "tool_call_started", stepId: stepLabel, api: "web", path: `search: "${query}"`, estCents: 0 };
+  const startedAt = Date.now();
+  try {
+    const results = await deps.web.search(query);
+    yield {
+      type: "tool_result",
+      stepId: stepLabel,
+      requestId: asRequestId(`web_${stepLabel}`),
+      summary: `${results.length} web result${results.length === 1 ? "" : "s"} for "${query}"`,
+      priceCents: 0,
+      latencyMs: Date.now() - startedAt,
+      ok: results.length > 0,
+    };
+    const body =
+      results.length === 0
+        ? `No web results for "${query}".`
+        : results.map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.snippet}`).join("\n");
+    return { kind: "ok", sessionCents, toolContent: body };
+  } catch (err) {
+    return yield* webFailed(stepLabel, "web_search", startedAt, err, sessionCents);
+  }
+}
+
+async function* dispatchWebScrape(
+  deps: AgentDeps,
+  call: ToolCallRequest,
+  stepId: number,
+  sessionCents: number,
+): AsyncGenerator<TraceEvent, DispatchResult> {
+  const url = asString(call.args["url"]) ?? "";
+  const stepLabel = `step_${stepId}`;
+  yield { type: "tool_call_started", stepId: stepLabel, api: "web", path: url || "scrape", estCents: 0 };
+  const startedAt = Date.now();
+  try {
+    const page = await deps.web.scrape(url);
+    yield {
+      type: "tool_result",
+      stepId: stepLabel,
+      requestId: asRequestId(`web_${stepLabel}`),
+      summary: `read ${page.url} (${page.markdown.length} chars${page.truncated ? ", truncated" : ""})`,
+      priceCents: 0,
+      latencyMs: Date.now() - startedAt,
+      ok: true,
+    };
+    const header = page.title ? `# ${page.title}\n(source: ${page.url})\n\n` : `(source: ${page.url})\n\n`;
+    return { kind: "ok", sessionCents, toolContent: header + page.markdown };
+  } catch (err) {
+    return yield* webFailed(stepLabel, "web_scrape", startedAt, url ? err : "missing url", sessionCents);
+  }
 }
 
 async function* dispatchRun(

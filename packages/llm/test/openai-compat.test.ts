@@ -44,4 +44,23 @@ describe("openai-compat — tool round-trip serialization", () => {
     expect(tool.name).toBe("run_tool");
     expect(tool.tool_call_id).toBe("call_1");
   });
+
+  it("recovers the first object when Gemini concatenates two tool-call argument fragments", async () => {
+    // Gemini's compat layer sometimes merges two parallel calls' args into one
+    // fragment. The parser must recover the first call rather than abort the turn.
+    const chunks = [
+      { choices: [{ delta: { tool_calls: [{ index: 0, id: "c1", function: { name: "web_search", arguments: '{"query":"a"}{"query":"b"}' } }] } }] },
+      { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+    ];
+    const provider = createOpenAICompatProvider({ providerId: "gemini", apiKey: "k", transport: cannedTransport(chunks) });
+    const events: LLMEvent[] = [];
+    for await (const e of provider.streamCompletion({ model: "gemini-2.5-flash", system: "", messages: [], tools: [], maxTokens: 256 })) events.push(e);
+
+    const call = events.find((e) => e.type === "tool_call_request") as Extract<LLMEvent, { type: "tool_call_request" }>;
+    expect(call).toBeTruthy();
+    expect(call.name).toBe("web_search");
+    expect(call.args).toEqual({ query: "a" });
+    // The turn completed normally — no throw.
+    expect(events.some((e) => e.type === "done")).toBe(true);
+  });
 });

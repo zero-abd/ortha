@@ -5,12 +5,13 @@ import {
   type LLMProvider,
   type MemoryStore,
   type OrthogonalClient,
+  type WebClient,
   type WorkspaceId,
 } from "@ortha/contracts";
 import { createBudgetPolicy, InMemorySpendStore, type SpendStorePort } from "@ortha/budget";
 import { DEFAULT_SETTINGS } from "@ortha/db";
 import { createMemoryStore, mapKvPort, type ConvSummaryState, type KvPort } from "@ortha/context";
-import { createOrthogonalClient, distill } from "@ortha/harness";
+import { createOrthogonalClient, createWebClient, distill } from "@ortha/harness";
 import { createAnthropicProvider, createOpenAICompatProvider, defaultModelRegistry } from "@ortha/llm";
 import type { Env } from "./env.js";
 import { kvStore } from "./kv.js";
@@ -18,6 +19,7 @@ import { kvStore } from "./kv.js";
 export interface AgentPorts {
   llm: LLMProvider;
   orthogonal: OrthogonalClient;
+  web: WebClient;
   budget: BudgetPolicy;
   memory: MemoryStore;
   model: string;
@@ -68,6 +70,9 @@ export async function buildLivePorts(
   }
 
   const orthogonal = createOrthogonalClient({ getApiKey: async () => orthoKey });
+  // Always-on web access (DuckDuckGo search + Jina reader). Keyless by default;
+  // an optional app-level JINA_API_KEY secret lifts the reader's rate limit.
+  const web = createWebClient(env.JINA_API_KEY ? { jinaApiKey: env.JINA_API_KEY } : {});
   const sessionCapCents = settings.sessionCapCents ?? DEFAULT_SETTINGS.sessionCapCents;
   const monthlyCapCents = settings.monthlyCapCents ?? DEFAULT_SETTINGS.monthlyCapCents;
   const perCallWarnCents = settings.perCallWarnCents ?? DEFAULT_SETTINGS.perCallWarnCents;
@@ -85,5 +90,5 @@ export async function buildLivePorts(
     summarize: async (text: string) => distill(text).summary,
   });
 
-  return { llm, orthogonal, budget, memory, model };
+  return { llm, orthogonal, web, budget, memory, model };
 }
