@@ -9,7 +9,6 @@ import {
 } from "@ortha/contracts";
 import { applySchema, createStore, d1Adapter, DEFAULT_SETTINGS, type SqlDb } from "@ortha/db";
 import type { ConversationStore } from "@ortha/contracts";
-import { createDemoPorts } from "./demo.js";
 import { doSqlAdapter } from "./do-sql.js";
 import type { Env } from "./env.js";
 import { buildLivePorts } from "./ports.js";
@@ -188,9 +187,19 @@ export class ConversationDO implements DurableObject {
     // results survive across turns (expand_result) and oversized blobs are truncated.
     const rawStore = createSqlRawStore(this.db);
 
-    // Live ports when this workspace has BYOK keys configured; demo otherwise.
-    const live = await buildLivePorts(this.env, this.workspaceId, spendStore, rawStore).catch(() => null);
-    const ports = live ?? { ...createDemoPorts(), model: "demo" };
+    // Real ports from the workspace's BYOK keys. No keys configured → surface a
+    // clear error and stop. We never run a fake/demo turn — real users, real spend.
+    const ports = await buildLivePorts(this.env, this.workspaceId, spendStore, rawStore).catch(() => null);
+    if (!ports) {
+      ws.send(
+        JSON.stringify({
+          type: "error",
+          code: "AUTH",
+          message: "No API keys configured. Add your Orthogonal key and a model-provider key in Settings to start.",
+        }),
+      );
+      return;
+    }
     const deps: AgentDeps = {
       llm: ports.llm,
       orthogonal: ports.orthogonal,
