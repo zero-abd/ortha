@@ -87,8 +87,12 @@ export function createWebClient(deps: WebClientDeps = {}): WebClient {
       // With a Jina key, search via Jina (keyed → no per-IP burst limit, returns
       // JSON). Keyless falls back to scraping DuckDuckGo's HTML endpoint.
       if (deps.jinaApiKey) {
+        // `X-Respond-With: no-content` returns the SERP (title/url/description)
+        // WITHOUT fetching every result's full page — ~2x faster and ~70x smaller
+        // than the default. The agent scrapes the specific results it wants next.
         const res = await get(`${JINA_SEARCH}?q=${encodeURIComponent(q)}`, "application/json", {
           Authorization: `Bearer ${deps.jinaApiKey}`,
+          "X-Respond-With": "no-content",
         });
         if (!res.ok) throw new Error(`search failed (${res.status})`);
         const body = (await res.json()) as { data?: { title?: string; url?: string; description?: string; content?: string }[] };
@@ -125,8 +129,11 @@ export function createWebClient(deps: WebClientDeps = {}): WebClient {
     async scrape(url: string): Promise<WebPage> {
       const target = url.trim();
       if (!/^https?:\/\//i.test(target)) throw new Error("scrape requires an absolute http(s) URL");
-      const auth = deps.jinaApiKey ? { Authorization: `Bearer ${deps.jinaApiKey}` } : {};
-      const res = await get(`${READER}${target}`, "text/markdown", auth);
+      // Strip image data (the LLM can't use it and it bloats the markdown) and
+      // bound Jina's own render time so a slow page can't hang the tool.
+      const readerHeaders: Record<string, string> = { "X-Retain-Images": "none", "X-Timeout": "15" };
+      if (deps.jinaApiKey) readerHeaders["Authorization"] = `Bearer ${deps.jinaApiKey}`;
+      const res = await get(`${READER}${target}`, "text/markdown", readerHeaders);
       if (!res.ok) throw new Error(`could not read ${target} (${res.status})`);
       const raw = (await res.text()).trim();
       // Jina prepends "Title: …\nURL Source: …\nMarkdown Content:\n". Lift the title.
