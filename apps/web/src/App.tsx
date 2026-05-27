@@ -840,6 +840,19 @@ function Message({ m, onOpenRaw, rawStore, pending, resolvedPerms, onDecide, cap
     );
   }
   const showCostChip = pending?.event.kind === "cost";
+  // Contextual label for the persistent "working" spinner shown the whole time a turn
+  // is live (thinking → running a tool → responding), so there's always an indication
+  // something is happening.
+  const runningStep = m.steps.find((s: TraceStep) => s.status === "running");
+  const workingLabel = runningStep
+    ? runningStep.api === "web"
+      ? /search/i.test(runningStep.path ?? "")
+        ? "Searching the web…"
+        : "Reading the web…"
+      : `Running ${runningStep.api}…`
+    : m.content
+      ? "Responding…"
+      : "Thinking…";
   return (
     <div className="msg">
       <div className="msg__role">Ortha</div>
@@ -855,10 +868,10 @@ function Message({ m, onOpenRaw, rawStore, pending, resolvedPerms, onDecide, cap
         )}
         {m.content && <Markdown content={m.content} />}
         <Sources steps={m.steps} />
-        {m.streaming && !m.content && m.steps.length === 0 && (
+        {m.streaming && (
           <div className="thinking">
             <Spinner size={16} />
-            <span>Thinking…</span>
+            <span>{workingLabel}</span>
           </div>
         )}
         {m.error && (
