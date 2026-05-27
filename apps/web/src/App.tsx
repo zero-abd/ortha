@@ -8,6 +8,7 @@ import { Logo, Spinner } from "./components/Logo.tsx";
 import { RightPanel } from "./components/RightPanel.tsx";
 import { SettingsModal } from "./components/SettingsModal.tsx";
 import { SideEffectModal } from "./components/SideEffectModal.tsx";
+import { SkillsModal } from "./components/SkillsModal.tsx";
 import { TraceBlock } from "./components/TraceBlock.tsx";
 import { useTheme } from "./lib/useTheme.ts";
 import { runTurn } from "./transport.ts";
@@ -62,6 +63,7 @@ export function App() {
   const [draft, setDraft] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [discoverOpen, setDiscoverOpen] = useState(false);
+  const [skillsOpen, setSkillsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const rawStore = useRef(new Map<string, unknown>());
   const [activeId, setActiveId] = useState<string>(() => crypto.randomUUID());
@@ -331,6 +333,13 @@ export function App() {
           <span>Discover APIs</span>
         </button>
 
+        <button className="discover-btn" onClick={() => setSkillsOpen(true)}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+          </svg>
+          <span>Skills</span>
+        </button>
+
         <button className="acct-switch">
           <span>◐ Personal Account</span>
           <span className="acct-switch__chev">▾</span>
@@ -497,6 +506,8 @@ export function App() {
       />
 
       <DiscoverModal open={discoverOpen} onClose={() => setDiscoverOpen(false)} />
+
+      <SkillsModal open={skillsOpen} onClose={() => setSkillsOpen(false)} onRun={(prompt) => void send(prompt)} />
     </div>
   );
 }
