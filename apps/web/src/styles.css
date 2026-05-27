@@ -102,6 +102,13 @@ input, textarea, select { font: inherit; color: inherit; }
 .convo { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: var(--radius-sm); color: var(--ink-soft); font-size: 13.5px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: background 0.1s; }
 .convo:hover { background: var(--hover); }
 .convo--active { background: var(--active); color: var(--ink); font-weight: 500; }
+.convo__title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.convo__actions { display: none; align-items: center; gap: 2px; flex: none; margin-left: 4px; }
+.convo:hover .convo__actions, .convo--active .convo__actions { display: inline-flex; }
+.iconbtn--sm { width: 22px; height: 22px; font-size: 12px; border-radius: var(--radius-sm); }
+.convo--editing { padding: 4px 6px; }
+.convo__rename { flex: 1; min-width: 0; padding: 4px 6px; border: 1px solid var(--hairline-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--ink); font-size: 13.5px; }
+.convo__rename:focus { outline: none; border-color: var(--primary); }
 .convos__empty { padding: 10px; font-size: 13px; color: var(--faint); }
 
 .sidebar__foot { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid var(--hairline); }

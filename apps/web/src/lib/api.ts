@@ -60,6 +60,18 @@ export async function listConversations(): Promise<Conversation[]> {
   return ((await r.json()) as { conversations: Conversation[] }).conversations ?? [];
 }
 
+export async function renameConversation(id: string, title: string): Promise<void> {
+  await fetch(`${API}/api/conversations/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: authHeaders(),
+    body: JSON.stringify({ title }),
+  });
+}
+
+export async function deleteConversation(id: string): Promise<void> {
+  await fetch(`${API}/api/conversations/${encodeURIComponent(id)}`, { method: "DELETE", headers: authHeaders() });
+}
+
 export interface UsageData {
   monthCents: number;
   monthlyCapCents: number;
