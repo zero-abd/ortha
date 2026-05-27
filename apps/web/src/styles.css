@@ -437,7 +437,9 @@ input:focus, textarea:focus { outline: none; border-color: var(--ink-soft); }
 /* ── Agents activity panel ─────────────────────────────────────────────── */
 .agents-toggle { position: relative; }
 .agents-toggle__badge { position: absolute; top: 1px; right: 1px; min-width: 15px; height: 15px; padding: 0 3px; border-radius: 999px; background: var(--accent); color: #fff; font-size: 10px; line-height: 15px; text-align: center; font-family: var(--font-mono); }
-.agents { position: fixed; top: 0; right: 0; bottom: 0; width: min(92vw, 380px); z-index: 45; background: var(--sidebar); border-left: 1px solid var(--hairline-strong); display: flex; flex-direction: column; box-shadow: var(--shadow-pop); }
+/* Above modal scrims (settings/batch = 50) so it stays watchable as a HUD while a
+   batch runs in its modal; below the command palette (70). */
+.agents { position: fixed; top: 0; right: 0; bottom: 0; width: min(92vw, 380px); z-index: 65; background: var(--sidebar); border-left: 1px solid var(--hairline-strong); display: flex; flex-direction: column; box-shadow: var(--shadow-pop); }
 .agents__head { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-bottom: 1px solid var(--hairline); }
 .agents__title { font-weight: 600; display: flex; align-items: center; gap: 8px; }
 .agents__count { font-size: 11px; font-family: var(--font-mono); color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); padding: 1px 7px; border-radius: 999px; }
