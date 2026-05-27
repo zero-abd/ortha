@@ -23,7 +23,11 @@ export async function listKeys(): Promise<KeyMeta[]> {
 }
 
 export async function putKey(provider: string, key: string): Promise<void> {
-  await fetch(`${API}/api/workspace/keys/${provider}`, { method: "PUT", headers: keyHeaders(), body: JSON.stringify({ key }) });
+  const r = await fetch(`${API}/api/workspace/keys/${provider}`, { method: "PUT", headers: keyHeaders(), body: JSON.stringify({ key }) });
+  if (!r.ok) {
+    const msg = ((await r.json().catch(() => ({}))) as { error?: string }).error;
+    throw new Error(msg || `Couldn't save key (${r.status})`);
+  }
 }
 
 export async function deleteKey(provider: string): Promise<void> {
