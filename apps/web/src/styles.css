@@ -173,6 +173,31 @@ input, textarea, select { font: inherit; color: inherit; }
 .trace__detail { padding: 0 12px 11px 34px; font-size: 13px; color: var(--muted); display: flex; flex-direction: column; gap: 6px; }
 .trace__result-row { color: var(--ink-soft); }
 .trace__heal { padding: 0 12px 10px 34px; font-family: var(--font-mono); font-size: 12px; color: var(--warn); }
+
+/* ── Structured result card (tool output as record / table) ────────────── */
+.rcard { border: 1px solid var(--hairline); border-radius: var(--radius-sm); background: var(--surface); overflow: hidden; }
+.rcard__head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 10px; border-bottom: 1px solid var(--hairline); background: var(--sidebar); }
+.rcard__kind { font-size: 11.5px; color: var(--faint); letter-spacing: 0.02em; }
+.rcard__actions { display: flex; align-items: center; gap: 4px; }
+.rcard__btn { padding: 4px 9px; border: 1px solid var(--hairline-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--ink-soft); font-size: 12px; transition: background 0.12s, border-color 0.12s, color 0.12s; }
+.rcard__btn:hover { background: var(--hover); border-color: var(--ink-soft); color: var(--ink); }
+.rcard__body { max-height: 420px; overflow: auto; }
+
+.rcard__record { margin: 0; display: flex; flex-direction: column; }
+.rcard__kv { display: flex; gap: 12px; padding: 7px 12px; border-bottom: 1px solid var(--hairline); }
+.rcard__kv:last-child { border-bottom: none; }
+.rcard__k { flex: none; width: 36%; max-width: 200px; margin: 0; color: var(--muted); font-size: 12.5px; font-family: var(--font-mono); word-break: break-word; }
+.rcard__v { flex: 1; min-width: 0; margin: 0; color: var(--ink); font-size: 13px; word-break: break-word; white-space: pre-wrap; }
+
+.rcard__tablewrap { display: flex; flex-direction: column; }
+.rcard__table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.rcard__table th { position: sticky; top: 0; z-index: 1; text-align: left; padding: 7px 12px; background: var(--sidebar); color: var(--muted); font-weight: 600; font-family: var(--font-mono); font-size: 11.5px; letter-spacing: 0.02em; white-space: nowrap; border-bottom: 1px solid var(--hairline-strong); }
+.rcard__table td { padding: 7px 12px; color: var(--ink-soft); border-bottom: 1px solid var(--hairline); max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rcard__table tbody tr:last-child td { border-bottom: none; }
+.rcard__table tbody tr:hover td { background: var(--hover); }
+.rcard__more { align-self: flex-start; padding: 8px 12px; font-size: 12.5px; }
+
+.rcard__text { margin: 0; padding: 12px; font-size: 12px; color: var(--muted); white-space: pre-wrap; word-break: break-word; }
 .spin { animation: spin 0.9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .ortha-spin { display: inline-block; vertical-align: -2px; transform-origin: 50% 50%; animation: spin 0.85s cubic-bezier(0.6,0.1,0.4,0.9) infinite; }
