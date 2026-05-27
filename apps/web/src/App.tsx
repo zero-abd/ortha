@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PermissionResponse, TraceEvent } from "@ortha/contracts";
+import { DEFAULT_MODEL_ID } from "@ortha/contracts";
 import { ApprovalChip } from "./components/ApprovalChip.tsx";
 import { CommandPalette } from "./components/CommandPalette.tsx";
 import { CostMeter } from "./components/CostMeter.tsx";
@@ -35,7 +36,7 @@ const DEFAULT_SETTINGS: ApiSettings = {
   sessionCapCents: 500,
   perCallWarnCents: 25,
   monthlyCapCents: 10_000,
-  model: "gemini-3-flash-preview",
+  model: DEFAULT_MODEL_ID,
   theme: "system",
   cacheTtlSeconds: 300,
 };
