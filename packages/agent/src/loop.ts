@@ -91,8 +91,9 @@ const DEFAULT_MAX_TOKENS = 8192;
 // company/people lookup + an email-finder per founder can be 20+ run_tool steps.
 // Simple turns stop early on their own (the model answers and ends), and the
 // spend cap + permission gates bound cost, so a high ceiling only unblocks the
-// hard tasks; it doesn't make easy ones expensive.
-const DEFAULT_MAX_ITERATIONS = 24;
+// hard tasks; it doesn't make easy ones expensive. 32 covers ~15-20 founders
+// (a company/people lookup + one or two enrichment calls each) in one turn.
+const DEFAULT_MAX_ITERATIONS = 32;
 /** How many times we nudge a model that narrates a next tool action without
  *  emitting the call, before accepting its turn as final. Bounds wasted turns. */
 const MAX_AUTO_CONTINUE = 2;
@@ -466,9 +467,15 @@ async function* dispatchWebSearch(
   if (webSearch.seen.has(norm)) {
     return { kind: "ok", sessionCents, toolContent: "Already searched that — use the earlier results." };
   }
-  // Per-turn budget: once spent, force the model to answer with what it has.
+  // Per-turn budget: once spent, steer to the catalog (still available) rather than
+  // stopping. The model used to read "budget reached" as overall capacity and quit early.
   if (webSearch.used >= webSearch.cap) {
-    return { kind: "ok", sessionCents, toolContent: "Search budget reached; answer with what you have." };
+    return {
+      kind: "ok",
+      sessionCents,
+      toolContent:
+        "Web-search budget reached for this turn. This does NOT limit the catalog — keep using search_tools / run_tool for any structured data you still need (people, contacts, emails, enrichment), including finishing per-entity lookups. Only answer once you've gathered what the user asked for.",
+    };
   }
   webSearch.used += 1;
   webSearch.seen.add(norm);

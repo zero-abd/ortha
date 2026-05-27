@@ -756,7 +756,7 @@ describe("runAgentTurn — web_search budget + dedup", () => {
     const llm = makeTurnScriptedLLM([...searchTurns, [{ type: "token", text: "done" }, { type: "done", stopReason: "end" }]]);
     await collect(baseDeps({ llm, web, onMessage, maxIterations: 14 }));
     expect(calls).toBe(8); // budget cap held
-    expect(contents.some((c) => c.includes("Search budget reached"))).toBe(true);
+    expect(contents.some((c) => c.includes("Web-search budget reached"))).toBe(true);
   });
 
   it("raises the cap in deep-research mode", async () => {
