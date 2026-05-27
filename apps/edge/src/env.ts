@@ -12,4 +12,7 @@ export interface Env {
   GOOGLE_CLIENT_ID?: string;
   /** Google OAuth client secret (wrangler secret). Required for Google sign-in. */
   GOOGLE_CLIENT_SECRET?: string;
+  /** Optional Jina reader key (wrangler secret) — one key for the whole app, lifts
+   *  the keyless rate limit on web_scrape. Web tools work without it (light use). */
+  JINA_API_KEY?: string;
 }

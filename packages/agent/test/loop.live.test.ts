@@ -9,7 +9,7 @@ import {
   type TraceEvent,
   type WorkspaceId,
 } from "@ortha/contracts";
-import { makeMockMemoryStore } from "@ortha/contracts/mocks";
+import { makeMockMemoryStore, makeMockWebClient } from "@ortha/contracts/mocks";
 import { createBudgetPolicy, InMemorySpendStore } from "@ortha/budget";
 import { createOrthogonalClient } from "@ortha/harness";
 import { describe, expect, it } from "vitest";
@@ -61,6 +61,7 @@ describe.skipIf(!KEY)("live agent loop against real Orthogonal API", () => {
         [{ type: "token", text: "Scraped the page." }, { type: "done", stopReason: "end" }],
       ]),
       orthogonal: createOrthogonalClient({ getApiKey: async () => KEY! }),
+      web: makeMockWebClient(),
       budget,
       memory: makeMockMemoryStore(),
       model: "scripted",

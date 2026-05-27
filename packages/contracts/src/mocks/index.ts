@@ -28,6 +28,7 @@ import type {
   ToolDetails,
 } from "../orthogonal.js";
 import type { ConversationStore, NewMessage, NewToolCall } from "../store.js";
+import type { WebClient, WebPage, WebSearchResult } from "../web.js";
 
 let counter = 0;
 const uid = (p: string): string => `${p}_${(++counter).toString(36)}_${Date.now().toString(36)}`;
@@ -85,6 +86,21 @@ export function makeMockOrthogonalClient(
         hasUnknownPrices: false,
         hasDynamicPricing: false,
       };
+    },
+  };
+  return { ...base, ...overrides };
+}
+
+export function makeMockWebClient(overrides: Partial<WebClient> = {}): WebClient {
+  const base: WebClient = {
+    async search(query: string): Promise<readonly WebSearchResult[]> {
+      return [
+        { title: `Result for ${query}`, url: "https://example.com/a", snippet: "A relevant page about the query." },
+        { title: "Second result", url: "https://example.com/b", snippet: "Another relevant page." },
+      ];
+    },
+    async scrape(url: string): Promise<WebPage> {
+      return { url, title: "Example Page", markdown: `# Example\n\nContents of ${url}.`, truncated: false };
     },
   };
   return { ...base, ...overrides };

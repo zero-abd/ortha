@@ -248,6 +248,7 @@ export class ConversationDO implements DurableObject {
     const deps: AgentDeps = {
       llm: ports.llm,
       orthogonal: ports.orthogonal,
+      web: ports.web,
       budget: ports.budget,
       memory: ports.memory,
       model: ports.model,
