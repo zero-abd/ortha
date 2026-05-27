@@ -28,5 +28,10 @@ database_id = "fdc2bbba-c94a-4eb9-8fd7-64d9a750052d"
 binding = "KV"
 id = "363a7af242d44c70957af6b11a5bdd56"
 
+# --- Public vars (safe to commit; an OAuth client id is not a secret) ---
+[vars]
+GOOGLE_CLIENT_ID = "1044864752824-4nchd1eg5rrjrnf436ef73mfg5u44g8i.apps.googleusercontent.com"
+
 # Secrets (set via `wrangler secret put`, NOT here):
-#   KEY_ENCRYPTION_KEY  — master key that encrypts per-workspace BYOK keys at rest
+#   KEY_ENCRYPTION_KEY    — master key encrypting per-device BYOK keys at rest
+#   GOOGLE_CLIENT_SECRET  — Google OAuth client secret (enables Google sign-in)

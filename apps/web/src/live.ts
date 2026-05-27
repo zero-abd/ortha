@@ -1,5 +1,6 @@
 import type { PermissionResponse, TraceEvent } from "@ortha/contracts";
-import { getWorkspaceId } from "./lib/config.ts";
+import { getDeviceId } from "./lib/config.ts";
+import { getToken } from "./lib/auth.ts";
 import type { TurnDeps } from "./types.ts";
 
 export interface LiveDeps extends TurnDeps {
@@ -14,8 +15,9 @@ export interface LiveDeps extends TurnDeps {
 export function runLiveTurn(text: string, deps: LiveDeps, apiBase: string): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const wsBase = apiBase.replace(/^http/, "ws");
-    const wsId = encodeURIComponent(getWorkspaceId());
-    const ws = new WebSocket(`${wsBase}/api/conversations/${encodeURIComponent(deps.conversationId)}/stream?ws=${wsId}`);
+    const token = encodeURIComponent(getToken() ?? "");
+    const device = encodeURIComponent(getDeviceId());
+    const ws = new WebSocket(`${wsBase}/api/conversations/${encodeURIComponent(deps.conversationId)}/stream?token=${token}&device=${device}`);
     let opened = false;
     const openTimer = setTimeout(() => {
       if (!opened) {
@@ -66,8 +68,9 @@ export function runLiveTurn(text: string, deps: LiveDeps, apiBase: string): Prom
 export function fetchHistory(conversationId: string, apiBase: string): Promise<{ role: string; content: string }[]> {
   return new Promise((resolve) => {
     const wsBase = apiBase.replace(/^http/, "ws");
-    const wsId = encodeURIComponent(getWorkspaceId());
-    const ws = new WebSocket(`${wsBase}/api/conversations/${encodeURIComponent(conversationId)}/stream?ws=${wsId}`);
+    const token = encodeURIComponent(getToken() ?? "");
+    const device = encodeURIComponent(getDeviceId());
+    const ws = new WebSocket(`${wsBase}/api/conversations/${encodeURIComponent(conversationId)}/stream?token=${token}&device=${device}`);
     const finish = (msgs: { role: string; content: string }[]) => {
       clearTimeout(timer);
       try { ws.close(); } catch { /* noop */ }

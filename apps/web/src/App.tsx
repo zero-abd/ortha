@@ -12,6 +12,8 @@ import { TraceBlock } from "./components/TraceBlock.tsx";
 import { useTheme } from "./lib/useTheme.ts";
 import { runTurn } from "./transport.ts";
 import { fetchHistory } from "./live.ts";
+import { AuthScreen } from "./components/AuthScreen.tsx";
+import { loginGoogle, logout, me, type AuthUser } from "./lib/auth.ts";
 import { API } from "./lib/config.ts";
 import { getSettings, listConversations, putSettings, type ApiSettings, type Conversation } from "./lib/api.ts";
 import { PROVIDERS, defaultModelOf, providerOfModel } from "./lib/providers.ts";
@@ -63,6 +65,8 @@ export function App() {
   const rawStore = useRef(new Map<string, unknown>());
   const [activeId, setActiveId] = useState<string>(() => crypto.randomUUID());
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
 
   const patchActive = useCallback((fn: (m: ChatMessage) => ChatMessage) => {
     setMessages((prev) => {
@@ -79,16 +83,37 @@ export function App() {
   const refreshConversations = useCallback(() => {
     void listConversations().then(setConversations).catch(() => {});
   }, []);
-  useEffect(() => refreshConversations(), [refreshConversations]);
-
-  // Seed caps/remaining from persisted settings.
   useEffect(() => {
+    if (user) refreshConversations();
+  }, [user, refreshConversations]);
+
+  // Required login: resolve the session on mount, handling a Google ?code= return.
+  useEffect(() => {
+    void (async () => {
+      const u = new URL(window.location.href);
+      const code = u.searchParams.get("code");
+      if (code) {
+        try {
+          await loginGoogle(code, u.origin + u.pathname);
+        } catch {
+          /* fall through to me() */
+        }
+        window.history.replaceState({}, "", u.origin + u.pathname);
+      }
+      setUser(await me());
+      setAuthChecked(true);
+    })();
+  }, []);
+
+  // Seed caps/remaining from persisted settings once signed in.
+  useEffect(() => {
+    if (!user) return;
     void (async () => {
       const loaded = (await getSettings()) ?? DEFAULT_SETTINGS;
       setSettings(loaded);
       setCost((c) => ({ ...c, capCents: loaded.sessionCapCents, remainingCents: loaded.monthlyCapCents }));
     })();
-  }, []);
+  }, [user]);
 
   // Persist a new model (provider default).
   const changeProvider = useCallback((providerId: string) => {
@@ -242,6 +267,15 @@ export function App() {
 
   const empty = messages.length === 0;
 
+  if (!authChecked) {
+    return (
+      <div className="auth">
+        <Spinner size={28} />
+      </div>
+    );
+  }
+  if (!user) return <AuthScreen onAuthed={setUser} />;
+
   return (
     <div className="app">
       <aside className="sidebar">
@@ -289,8 +323,8 @@ export function App() {
             <span className="balance__amt">${(cost.sessionCents / 100).toFixed(2)} / ${(cost.capCents / 100).toFixed(2)}</span>
           </div>
           <button className="acct" onClick={() => setSettingsOpen(true)} aria-label="Account and settings">
-            <span className="acct__avatar">A</span>
-            <span className="acct__name">Abdullah Al Mahmud</span>
+            <span className="acct__avatar">{(user.displayName ?? user.email ?? "U").charAt(0).toUpperCase()}</span>
+            <span className="acct__name">{user.displayName ?? user.email ?? "Account"}</span>
             <span className="acct__chev">⚙</span>
           </button>
         </div>
@@ -359,7 +393,18 @@ export function App() {
         />
       )}
 
-      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} onSaved={onSettingsSaved} />
+      <SettingsModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onSaved={onSettingsSaved}
+        user={user}
+        onSignOut={async () => {
+          await logout();
+          setSettingsOpen(false);
+          resetSession();
+          setUser(null);
+        }}
+      />
 
       <DiscoverModal open={discoverOpen} onClose={() => setDiscoverOpen(false)} />
     </div>
