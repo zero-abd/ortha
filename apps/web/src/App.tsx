@@ -12,7 +12,7 @@ import { Markdown } from "./components/Markdown.tsx";
 import { RightPanel } from "./components/RightPanel.tsx";
 import { SettingsModal } from "./components/SettingsModal.tsx";
 import { SideEffectModal } from "./components/SideEffectModal.tsx";
-import { SkillsModal } from "./components/SkillsModal.tsx";
+import { SkillsModal, extractVars } from "./components/SkillsModal.tsx";
 import { ConnectorsModal } from "./components/ConnectorsModal.tsx";
 import { BatchModal } from "./components/BatchModal.tsx";
 import { collectRow, type RowResult } from "./lib/batch.ts";
@@ -25,9 +25,9 @@ import { fetchHistory } from "./live.ts";
 import { AuthScreen } from "./components/AuthScreen.tsx";
 import { loginGoogle, logout, me, type AuthUser } from "./lib/auth.ts";
 import { API } from "./lib/config.ts";
-import { deleteConversation, getSettings, listConversations, putSettings, renameConversation, type ApiSettings, type Conversation } from "./lib/api.ts";
+import { deleteConversation, getSettings, listConversations, listSkills, putSettings, renameConversation, type ApiSettings, type Conversation, type Skill } from "./lib/api.ts";
 import { modelInfo, modelsForProvider, PROVIDERS, defaultModelOf, providerOfModel } from "./lib/providers.ts";
-import { runCommand, type Command, type CommandContext } from "./lib/commands.ts";
+import { runCommand, setSkillCommands, skillCommand, type Command, type CommandContext } from "./lib/commands.ts";
 import { wrapResearch } from "./lib/research.ts";
 import type { AgentRun, ChatMessage, CostState, RawArtifact, TraceStep } from "./types.ts";
 import { AgentsPanel } from "./components/AgentsPanel.tsx";
@@ -137,6 +137,8 @@ export function App() {
   const [connectorsOpen, setConnectorsOpen] = useState(false);
   const [discoverOpen, setDiscoverOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
+  const [userSkills, setUserSkills] = useState<Skill[]>([]);
+  const [runSkillTarget, setRunSkillTarget] = useState<Skill | null>(null);
   const [batchOpen, setBatchOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [agentsOpen, setAgentsOpen] = useState(false);
@@ -431,6 +433,16 @@ export function App() {
     openSettings: () => setSettingsOpen(true),
     clearChat,
     openBatch: () => setBatchOpen(true),
+    // `/skill` commands: run a no-field skill straight away; for one with fields,
+    // open its run form so the user fills them in first.
+    runSkill: (skill) => {
+      if (extractVars(skill.template).length === 0) {
+        send(skill.template);
+      } else {
+        setRunSkillTarget(userSkills.find((s) => s.name === skill.name) ?? null);
+        setSkillsOpen(true);
+      }
+    },
   };
   const commandCtx = useRef<CommandContext>({
     send: (t) => ctxImpl.current.send(t),
@@ -440,7 +452,13 @@ export function App() {
     openSettings: () => ctxImpl.current.openSettings(),
     clearChat: () => ctxImpl.current.clearChat(),
     openBatch: () => ctxImpl.current.openBatch(),
+    runSkill: (s) => ctxImpl.current.runSkill(s),
   }).current;
+
+  // Load saved skills and expose them as `/` slash commands; rebuild on change.
+  const refreshSkills = useCallback(() => { void listSkills().then(setUserSkills); }, []);
+  useEffect(() => { refreshSkills(); }, [refreshSkills]);
+  useEffect(() => { setSkillCommands(userSkills); }, [userSkills]);
 
   // Run a slash/palette command against the stable context.
   const onCommand = useCallback((cmd: Command, arg: string) => {
@@ -765,7 +783,13 @@ export function App() {
 
       <DiscoverModal open={discoverOpen} onClose={() => setDiscoverOpen(false)} />
 
-      <SkillsModal open={skillsOpen} onClose={() => setSkillsOpen(false)} onRun={(prompt) => void send(prompt)} />
+      <SkillsModal
+        open={skillsOpen}
+        onClose={() => { setSkillsOpen(false); setRunSkillTarget(null); }}
+        onRun={(prompt) => void send(prompt)}
+        onSkillsChanged={(s) => setUserSkills(s)}
+        initialRunSkill={runSkillTarget}
+      />
       <ConnectorsModal open={connectorsOpen} onClose={() => setConnectorsOpen(false)} />
       <BatchModal open={batchOpen} onClose={() => setBatchOpen(false)} runRow={runBatchRow} />
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} ctx={commandCtx} />

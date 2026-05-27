@@ -1,17 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   COMMANDS,
   matchCommands,
   parseSlash,
   resolveProvider,
   runCommand,
+  setSkillCommands,
+  skillSlug,
   type CommandContext,
 } from "../src/lib/commands.ts";
 
 function makeCtx(): CommandContext & {
-  calls: { sent: string[]; drafts: string[]; providers: string[]; newChat: number; settings: number; clear: number; batch: number };
+  calls: { sent: string[]; drafts: string[]; providers: string[]; newChat: number; settings: number; clear: number; batch: number; skills: string[] };
 } {
-  const calls = { sent: [] as string[], drafts: [] as string[], providers: [] as string[], newChat: 0, settings: 0, clear: 0, batch: 0 };
+  const calls = { sent: [] as string[], drafts: [] as string[], providers: [] as string[], newChat: 0, settings: 0, clear: 0, batch: 0, skills: [] as string[] };
   return {
     calls,
     send: (t) => calls.sent.push(t),
@@ -29,6 +31,7 @@ function makeCtx(): CommandContext & {
     openBatch: () => {
       calls.batch++;
     },
+    runSkill: (s) => calls.skills.push(s.name),
   };
 }
 
@@ -174,5 +177,31 @@ describe("expansions stay tool-agnostic", () => {
       const text = (c.expand("test input") ?? "").toLowerCase();
       for (const b of banned) expect(text).not.toContain(b);
     }
+  });
+});
+
+describe("dynamic skill commands", () => {
+  afterEach(() => setSkillCommands([])); // reset the module registry between tests
+
+  it("slugifies skill names into slash triggers", () => {
+    expect(skillSlug("Find Leads")).toBe("find-leads");
+    expect(skillSlug("  Enrich!! Person  ")).toBe("enrich-person");
+    expect(skillSlug("")).toBe("skill");
+  });
+
+  it("exposes saved skills via matchCommands and runs them through runSkill", () => {
+    setSkillCommands([{ name: "Find Leads", template: "Find leads for {company}" }]);
+    const hit = matchCommands("/find-leads").find((c) => c.id === "find-leads");
+    expect(hit).toBeTruthy();
+    const ctx = makeCtx();
+    runCommand(hit!, "", ctx);
+    expect(ctx.calls.skills).toEqual(["Find Leads"]);
+  });
+
+  it("a saved skill never shadows a built-in command id", () => {
+    setSkillCommands([{ name: "research", template: "x" }]);
+    const research = matchCommands("/research").filter((c) => c.id === "research");
+    expect(research).toHaveLength(1);
+    expect(research[0]!.kind).toBe("prompt"); // the built-in, not the skill action
   });
 });

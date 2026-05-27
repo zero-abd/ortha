@@ -29,6 +29,8 @@ export interface CommandContext {
   clearChat: () => void;
   /** Open the batch runner (run a skill across many rows). */
   openBatch: () => void;
+  /** Run a saved skill: send it directly if it has no fields, else open its run form. */
+  runSkill: (skill: { name: string; template: string }) => void;
 }
 
 export type CommandKind = "prompt" | "action";
@@ -173,6 +175,49 @@ export const COMMANDS: Command[] = [
   },
 ];
 
+// ── Dynamic skill commands ──────────────────────────────────────────────────
+// Saved skills (the user's own + any public skill they added) are exposed as
+// slash commands so `/their-skill` runs it. The host (App) rebuilds this list
+// whenever the skill set changes via `setSkillCommands`. Kept in a module-level
+// registry so both the slash menu and the ⌘K palette (which share
+// `matchCommands`) pick them up without threading props through every layer.
+let SKILL_COMMANDS: Command[] = [];
+
+/** Slugify a skill name into a slash trigger, e.g. "Find Leads" → "find-leads". */
+export function skillSlug(name: string): string {
+  return (
+    name.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "skill"
+  );
+}
+
+/** Build the slash command for one saved skill (runs it via `ctx.runSkill`). */
+export function skillCommand(skill: { name: string; template: string }): Command {
+  return {
+    id: skillSlug(skill.name),
+    title: `/${skillSlug(skill.name)}`,
+    description: skill.name,
+    kind: "action",
+    run: (ctx) => ctx.runSkill(skill),
+  };
+}
+
+/** Replace the dynamic skill-command set (called by the host when skills change). */
+export function setSkillCommands(skills: readonly { name: string; template: string }[]): void {
+  const seen = new Set(COMMANDS.map((c) => c.id));
+  SKILL_COMMANDS = [];
+  for (const s of skills) {
+    const cmd = skillCommand(s);
+    if (seen.has(cmd.id)) continue; // built-in command wins on a name clash
+    seen.add(cmd.id);
+    SKILL_COMMANDS.push(cmd);
+  }
+}
+
+/** Built-in commands plus the current dynamic skill commands. */
+function allCommands(): Command[] {
+  return SKILL_COMMANDS.length > 0 ? [...COMMANDS, ...SKILL_COMMANDS] : COMMANDS;
+}
+
 /** Subsequence fuzzy match: are all chars of `needle` found in order in `hay`? */
 function fuzzyHit(hay: string, needle: string): boolean {
   if (!needle) return true;
@@ -196,9 +241,10 @@ export function matchCommands(query: string): Command[] {
   // narrow the list once a command is chosen.
   const raw = query.startsWith("/") ? query.slice(1) : query;
   const word = raw.split(/\s+/)[0]?.toLowerCase() ?? "";
-  if (!word) return COMMANDS;
+  const pool = allCommands();
+  if (!word) return pool;
 
-  const scored = COMMANDS.map((c) => {
+  const scored = pool.map((c) => {
     const id = c.id.toLowerCase();
     let score = -1;
     if (id === word) score = 3;

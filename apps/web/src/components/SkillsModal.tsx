@@ -45,12 +45,18 @@ interface Props {
   onClose: () => void;
   /** Called with the filled prompt when a skill is run. Parent wires this to send(). */
   onRun: (prompt: string) => void;
+  /** Fired whenever the saved-skill set changes (create / install / delete) so the
+   *  host can refresh its `/` slash commands. */
+  onSkillsChanged?: (skills: Skill[]) => void;
+  /** When set on open, jump straight to this skill's run form (used by `/skill`
+   *  commands whose template has fields to fill). */
+  initialRunSkill?: Skill | null;
 }
 
 type Tab = "yours" | "public";
 type View = { mode: "list" } | { mode: "create" } | { mode: "run"; skill: Skill };
 
-export function SkillsModal({ open, onClose, onRun }: Props) {
+export function SkillsModal({ open, onClose, onRun, onSkillsChanged, initialRunSkill }: Props) {
   const [tab, setTab] = useState<Tab>("yours");
   const [skills, setSkills] = useState<Skill[]>([]);
   const [publicSkills, setPublicSkills] = useState<PublicSkill[] | null>(null);
@@ -63,7 +69,8 @@ export function SkillsModal({ open, onClose, onRun }: Props) {
   useEffect(() => {
     if (!open) return;
     setTab("yours");
-    setView({ mode: "list" });
+    // Honor a requested run target (from a `/skill` command), else the list.
+    setView(initialRunSkill ? { mode: "run", skill: initialRunSkill } : { mode: "list" });
     setName("");
     setTemplate("");
     setError("");
@@ -72,7 +79,7 @@ export function SkillsModal({ open, onClose, onRun }: Props) {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, [open, onClose, initialRunSkill]);
 
   // Lazily fetch the public catalog the first time the user opens that tab.
   useEffect(() => {
@@ -93,6 +100,7 @@ export function SkillsModal({ open, onClose, onRun }: Props) {
     setBusy(false);
     if (!next) return setError("Couldn't save the skill. Try again.");
     setSkills(next);
+    onSkillsChanged?.(next);
     setName("");
     setTemplate("");
     setError("");
@@ -102,13 +110,29 @@ export function SkillsModal({ open, onClose, onRun }: Props) {
   const remove = async (id: string) => {
     if (!window.confirm("Delete this skill? This cannot be undone.")) return;
     setBusy(true);
-    setSkills(await deleteSkill(id));
+    const next = await deleteSkill(id);
+    setSkills(next);
+    onSkillsChanged?.(next);
     setBusy(false);
   };
 
   const usePublic = (skill: PublicSkill) => {
     onRun(publicSkillPrompt(skill));
     onClose();
+  };
+
+  // Add a public skill to "Your skills" so it persists and shows up as a `/`
+  // command. The SKILL.md content becomes the skill's template (runs as-is).
+  const [added, setAdded] = useState<string | null>(null);
+  const installPublic = async (skill: PublicSkill) => {
+    setBusy(true);
+    const next = await saveSkill({ name: skill.name, template: publicSkillPrompt(skill) });
+    setBusy(false);
+    if (!next) return;
+    setSkills(next);
+    onSkillsChanged?.(next);
+    setAdded(skill.id);
+    setTimeout(() => setAdded((cur) => (cur === skill.id ? null : cur)), 1800);
   };
 
   const title =
@@ -160,7 +184,7 @@ export function SkillsModal({ open, onClose, onRun }: Props) {
           )}
 
           {view.mode === "list" && tab === "public" && (
-            <PublicSkillList skills={publicSkills} onUse={usePublic} />
+            <PublicSkillList skills={publicSkills} onUse={usePublic} onInstall={installPublic} addedId={added} busy={busy} />
           )}
 
           {view.mode === "create" && (
@@ -258,7 +282,19 @@ function SkillList({
   );
 }
 
-function PublicSkillList({ skills, onUse }: { skills: PublicSkill[] | null; onUse: (s: PublicSkill) => void }) {
+function PublicSkillList({
+  skills,
+  onUse,
+  onInstall,
+  addedId,
+  busy,
+}: {
+  skills: PublicSkill[] | null;
+  onUse: (s: PublicSkill) => void;
+  onInstall: (s: PublicSkill) => void;
+  addedId: string | null;
+  busy: boolean;
+}) {
   const [query, setQuery] = useState("");
 
   const { featured, rest } = useMemo(() => {
@@ -298,7 +334,7 @@ function PublicSkillList({ skills, onUse }: { skills: PublicSkill[] | null; onUs
           <span className="settings__label">Featured</span>
           <div className="skill__list">
             {featured.map((s) => (
-              <PublicSkillCard key={s.id} skill={s} onUse={onUse} />
+              <PublicSkillCard key={s.id} skill={s} onUse={onUse} onInstall={onInstall} added={addedId === s.id} busy={busy} />
             ))}
           </div>
         </section>
@@ -310,7 +346,7 @@ function PublicSkillList({ skills, onUse }: { skills: PublicSkill[] | null; onUs
         ) : (
           <div className="skill__list">
             {rest.map((s) => (
-              <PublicSkillCard key={s.id} skill={s} onUse={onUse} />
+              <PublicSkillCard key={s.id} skill={s} onUse={onUse} onInstall={onInstall} added={addedId === s.id} busy={busy} />
             ))}
           </div>
         )}
@@ -319,7 +355,19 @@ function PublicSkillList({ skills, onUse }: { skills: PublicSkill[] | null; onUs
   );
 }
 
-function PublicSkillCard({ skill, onUse }: { skill: PublicSkill; onUse: (s: PublicSkill) => void }) {
+function PublicSkillCard({
+  skill,
+  onUse,
+  onInstall,
+  added,
+  busy,
+}: {
+  skill: PublicSkill;
+  onUse: (s: PublicSkill) => void;
+  onInstall: (s: PublicSkill) => void;
+  added: boolean;
+  busy: boolean;
+}) {
   return (
     <article className="skillcard">
       <div className="skillcard__main">
@@ -341,6 +389,14 @@ function PublicSkillCard({ skill, onUse }: { skill: PublicSkill; onUse: (s: Publ
       </div>
       <div className="skillcard__actions">
         <button className="btn-sm btn-sm--accent" onClick={() => onUse(skill)}>Use</button>
+        <button
+          className="btn-sm"
+          disabled={busy || added}
+          onClick={() => onInstall(skill)}
+          title="Add to Your skills (then run it with /)"
+        >
+          {added ? "Added ✓" : "Add to my skills"}
+        </button>
       </div>
     </article>
   );
