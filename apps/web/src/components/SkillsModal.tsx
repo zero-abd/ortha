@@ -66,6 +66,10 @@ export function SkillsModal({ open, onClose, onRun, onSkillsChanged, initialRunS
   const [name, setName] = useState("");
   const [template, setTemplate] = useState("");
   const [error, setError] = useState("");
+  // Tracks which public skill was just added (for the "Added ✓" flash). Declared here
+  // with the other hooks — NOT after the `if (!open) return null` below — or the hook
+  // count changes when the modal opens and React crashes the app to a black screen.
+  const [added, setAdded] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -124,7 +128,6 @@ export function SkillsModal({ open, onClose, onRun, onSkillsChanged, initialRunS
 
   // Add a public skill to "Your skills" so it persists and shows up as a `/`
   // command. The SKILL.md content becomes the skill's template (runs as-is).
-  const [added, setAdded] = useState<string | null>(null);
   const installPublic = async (skill: PublicSkill) => {
     setBusy(true);
     const next = await saveSkill({ name: skill.name, template: publicSkillPrompt(skill) });
