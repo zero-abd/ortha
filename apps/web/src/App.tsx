@@ -62,6 +62,7 @@ export function App() {
   const [draft, setDraft] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [discoverOpen, setDiscoverOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const rawStore = useRef(new Map<string, unknown>());
   const [activeId, setActiveId] = useState<string>(() => crypto.randomUUID());
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -254,12 +255,14 @@ export function App() {
   const newChat = () => {
     resetSession();
     setActiveId(crypto.randomUUID());
+    setSidebarOpen(false);
   };
 
   const selectConversation = async (id: string) => {
     if (id === activeId || running) return;
     resetSession();
     setActiveId(id);
+    setSidebarOpen(false);
     const hist = await fetchHistory(id, API);
     setMessages(
       hist
@@ -313,7 +316,8 @@ export function App() {
 
   return (
     <div className="app">
-      <aside className="sidebar">
+      {sidebarOpen && <div className="sidebar-scrim" onClick={() => setSidebarOpen(false)} />}
+      <aside className={`sidebar${sidebarOpen ? " sidebar--open" : ""}`}>
         <div className="sidebar__brand">
           <Logo size={24} />
           <span className="brand__word">Ortha</span>
@@ -412,6 +416,12 @@ export function App() {
 
       <main className="main">
         <header className="main__top">
+          <button className="hamburger" onClick={() => setSidebarOpen(true)} aria-label="Open menu">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+              <line x1="4" y1="9" x2="20" y2="9" />
+              <line x1="4" y1="15" x2="13" y2="15" />
+            </svg>
+          </button>
           <span className="main__spacer" />
           {!empty && <CostMeter sessionCents={cost.sessionCents} capCents={cost.capCents} breakdown={breakdown} />}
           <Dropdown
