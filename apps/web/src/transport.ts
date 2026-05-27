@@ -16,6 +16,7 @@ export async function runTurn(
   deps: RunDeps,
   images?: readonly string[],
   deepResearch?: boolean,
+  webSearch?: boolean,
 ): Promise<void> {
-  await runLiveTurn(text, deps, API, images, deepResearch);
+  await runLiveTurn(text, deps, API, images, deepResearch, webSearch);
 }

@@ -102,6 +102,49 @@ export async function deleteSkill(id: string): Promise<Skill[]> {
   return ((await r.json()) as { skills: Skill[] }).skills ?? [];
 }
 
+/** A skill published to the public catalog (read-only; install with its SKILL.md content). */
+export interface PublicSkill {
+  id: string;
+  name: string;
+  slug: string;
+  description: string;
+  highlighted: boolean;
+  installCount: number;
+  verified: boolean;
+  tags: string[];
+  content: string;
+}
+
+/** Fetch the public skill catalog. Returns [] if the route is missing/erroring. */
+export async function getPublicSkills(): Promise<PublicSkill[]> {
+  try {
+    const r = await fetch(`${API}/api/skills/public`, { headers: authHeaders() });
+    if (!r.ok) return [];
+    return ((await r.json()) as { skills: PublicSkill[] }).skills ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/** A connector integration (e.g. Gmail). `coming_soon` connectors aren't yet connectable. */
+export interface Connector {
+  id: string;
+  name: string;
+  description: string;
+  status: "available" | "coming_soon";
+}
+
+/** Fetch the available connectors. Returns [] if the route is missing/erroring. */
+export async function getConnectors(): Promise<Connector[]> {
+  try {
+    const r = await fetch(`${API}/api/connectors`, { headers: authHeaders() });
+    if (!r.ok) return [];
+    return ((await r.json()) as { connectors: Connector[] }).connectors ?? [];
+  } catch {
+    return [];
+  }
+}
+
 export interface UsageData {
   monthCents: number;
   monthlyCapCents: number;
