@@ -102,6 +102,9 @@ export function makeMockWebClient(overrides: Partial<WebClient> = {}): WebClient
     async scrape(url: string): Promise<WebPage> {
       return { url, title: "Example Page", markdown: `# Example\n\nContents of ${url}.`, truncated: false };
     },
+    async scrapeMany(urls: readonly string[]): Promise<readonly PromiseSettledResult<WebPage>[]> {
+      return Promise.allSettled(urls.map((u) => this.scrape(u)));
+    },
   };
   return { ...base, ...overrides };
 }

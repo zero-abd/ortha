@@ -20,6 +20,15 @@ export interface WebClientDeps {
   /** Per-request timeout in ms. Default 20000. */
   timeoutMs?: number;
   /**
+   * Hard wall-clock timeout per scrape in ms. Default 10000 — tighter than the
+   * generic request timeout so one slow page can't stall a research turn. The
+   * Jina `X-Timeout` header bounds server-side render time but doesn't guarantee
+   * a fast client-side abort, so we wrap the fetch in our own AbortController.
+   */
+  scrapeTimeoutMs?: number;
+  /** Max concurrent scrapes for scrapeMany. Default 4. */
+  scrapeConcurrency?: number;
+  /**
    * Optional Jina reader API key (a single Worker secret, not a per-user key).
    * Keyless works for light use, but the free shared tier rate-limits (429) under
    * the Worker's shared IP on bursty multi-page reads; a key lifts that limit for
@@ -35,6 +44,33 @@ const UA =
 const DDG = "https://html.duckduckgo.com/html/";
 const READER = "https://r.jina.ai/";
 const JINA_SEARCH = "https://s.jina.ai/";
+
+/**
+ * Hosts that reliably block automated access. Reading these wastes the full
+ * scrape timeout on a guaranteed dead end (a login wall or 999 challenge), so
+ * scrape() short-circuits IMMEDIATELY with a clear error instead. Matched on the
+ * registrable domain, so www.linkedin.com and linkedin.com both hit.
+ */
+const BLOCKED_DOMAINS: ReadonlySet<string> = new Set([
+  "linkedin.com",
+  "facebook.com",
+  "instagram.com",
+  "x.com",
+  "twitter.com",
+]);
+
+/**
+ * Best-effort registrable domain (eTLD+1) for blocklist matching. Without a
+ * public-suffix list we take the last two labels, which covers the flat
+ * `example.com`-style hosts in the blocklist (www/sub-domains collapse to the
+ * same key). Multi-level TLDs (e.g. co.uk) aren't in the blocklist, so the
+ * naive heuristic is sufficient here.
+ */
+function registrableDomain(host: string): string {
+  const h = host.toLowerCase().replace(/\.$/, "");
+  const parts = h.split(".");
+  return parts.length <= 2 ? h : parts.slice(-2).join(".");
+}
 
 /** Decode DuckDuckGo's `//duckduckgo.com/l/?uddg=<encoded>` redirect to the real URL. */
 function resolveDdgHref(href: string): string {
@@ -68,12 +104,29 @@ export function createWebClient(deps: WebClientDeps = {}): WebClient {
   const maxPageChars = deps.maxPageChars ?? 8000;
   const maxResults = deps.maxResults ?? 8;
   const timeoutMs = deps.timeoutMs ?? 20_000;
+  const scrapeTimeoutMs = deps.scrapeTimeoutMs ?? 10_000;
+  const scrapeConcurrency = Math.max(1, deps.scrapeConcurrency ?? 4);
 
-  async function get(url: string, accept: string, extra: Record<string, string> = {}): Promise<Response> {
+  // A timed-out abort and a server failure are distinguishable: we tag the
+  // controller so the catch can throw a clear "timed out" error rather than a
+  // generic abort, matching how the agent loop surfaces scrape failures.
+  async function get(
+    url: string,
+    accept: string,
+    extra: Record<string, string> = {},
+    timeout = timeoutMs,
+  ): Promise<Response> {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      ctrl.abort();
+    }, timeout);
     try {
       return await doFetch(url, { headers: { "User-Agent": UA, Accept: accept, ...extra }, signal: ctrl.signal });
+    } catch (err) {
+      if (timedOut) throw new Error(`timed out after ${timeout}ms`);
+      throw err;
     } finally {
       clearTimeout(timer);
     }
@@ -129,11 +182,32 @@ export function createWebClient(deps: WebClientDeps = {}): WebClient {
     async scrape(url: string): Promise<WebPage> {
       const target = url.trim();
       if (!/^https?:\/\//i.test(target)) throw new Error("scrape requires an absolute http(s) URL");
+      // Short-circuit hosts that always block bots, so we don't burn the full
+      // scrape timeout hitting a guaranteed login wall / challenge page.
+      let host: string;
+      try {
+        host = new URL(target).hostname;
+      } catch {
+        throw new Error("scrape requires an absolute http(s) URL");
+      }
+      if (BLOCKED_DOMAINS.has(registrableDomain(host))) {
+        throw new Error(`cannot read ${host} (blocks automated access)`);
+      }
       // Strip image data (the LLM can't use it and it bloats the markdown) and
-      // bound Jina's own render time so a slow page can't hang the tool.
+      // bound Jina's own render time so a slow page can't hang the tool. A hard
+      // client-side abort (scrapeTimeoutMs) backstops the X-Timeout header so a
+      // single slow page can't stall the research turn.
       const readerHeaders: Record<string, string> = { "X-Retain-Images": "none", "X-Timeout": "15" };
       if (deps.jinaApiKey) readerHeaders["Authorization"] = `Bearer ${deps.jinaApiKey}`;
-      const res = await get(`${READER}${target}`, "text/markdown", readerHeaders);
+      let res: Response;
+      try {
+        res = await get(`${READER}${target}`, "text/markdown", readerHeaders, scrapeTimeoutMs);
+      } catch (err) {
+        if (err instanceof Error && /timed out/.test(err.message)) {
+          throw new Error(`scrape timed out reading ${target} (${scrapeTimeoutMs}ms)`);
+        }
+        throw err;
+      }
       if (!res.ok) throw new Error(`could not read ${target} (${res.status})`);
       const raw = (await res.text()).trim();
       // Jina prepends "Title: …\nURL Source: …\nMarkdown Content:\n". Lift the title.
@@ -145,6 +219,28 @@ export function createWebClient(deps: WebClientDeps = {}): WebClient {
         markdown: truncated ? `${raw.slice(0, maxPageChars)}\n\n…[truncated]` : raw,
         truncated,
       };
+    },
+
+    async scrapeMany(urls: readonly string[]): Promise<readonly PromiseSettledResult<WebPage>[]> {
+      // Bounded-concurrency fan-out so a research turn can read several pages at
+      // once without opening dozens of sockets. Order of results matches `urls`;
+      // each entry is a settled result so one failure never sinks the batch.
+      const results: PromiseSettledResult<WebPage>[] = new Array(urls.length);
+      let next = 0;
+      const worker = async (): Promise<void> => {
+        while (true) {
+          const i = next++;
+          if (i >= urls.length) return;
+          try {
+            results[i] = { status: "fulfilled", value: await this.scrape(urls[i]!) };
+          } catch (reason) {
+            results[i] = { status: "rejected", reason };
+          }
+        }
+      };
+      const workers = Array.from({ length: Math.min(scrapeConcurrency, urls.length) }, worker);
+      await Promise.all(workers);
+      return results;
     },
   };
 }

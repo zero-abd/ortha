@@ -83,4 +83,68 @@ describe("createWebClient.scrape (reader)", () => {
     const web = createWebClient();
     await expect(web.scrape("ftp://nope")).rejects.toThrow(/absolute http/);
   });
+
+  it("short-circuits blocked domains without fetching (registrable-domain match)", async () => {
+    let called = false;
+    const fetchImpl = (async () => {
+      called = true;
+      return new Response("", { status: 200 });
+    }) as unknown as typeof fetch;
+    const web = createWebClient({ fetchImpl });
+    await expect(web.scrape("https://www.linkedin.com/in/someone")).rejects.toThrow(
+      /blocks automated access/,
+    );
+    await expect(web.scrape("https://linkedin.com/feed")).rejects.toThrow(/blocks automated access/);
+    expect(called).toBe(false);
+  });
+
+  it("aborts and throws a clear timeout error when a scrape stalls", async () => {
+    // A fetch that never resolves until aborted, so only the client-side timeout ends it.
+    const fetchImpl = ((_url: string, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (signal) {
+          signal.addEventListener("abort", () =>
+            reject(Object.assign(new Error("aborted"), { name: "AbortError" })),
+          );
+        }
+      })) as unknown as typeof fetch;
+    const web = createWebClient({ scrapeTimeoutMs: 20, fetchImpl });
+    await expect(web.scrape("https://slow.example.com")).rejects.toThrow(/scrape timed out/);
+  });
+});
+
+describe("createWebClient.scrapeMany (bounded concurrency)", () => {
+  it("reads many URLs, preserving order with one settled result per input", async () => {
+    const web = createWebClient({ fetchImpl: fakeFetch({ "r.jina.ai": { body: JINA_MD } }) });
+    const results = await web.scrapeMany([
+      "https://a.example.com",
+      "https://www.linkedin.com/blocked",
+      "https://b.example.com",
+    ]);
+    expect(results).toHaveLength(3);
+    expect(results[0]!.status).toBe("fulfilled");
+    expect(results[1]!.status).toBe("rejected");
+    expect(results[2]!.status).toBe("fulfilled");
+    if (results[0]!.status === "fulfilled") expect(results[0]!.value.url).toBe("https://a.example.com");
+    if (results[1]!.status === "rejected") expect(String(results[1]!.reason)).toMatch(/blocks automated access/);
+  });
+
+  it("never runs more than the concurrency cap of scrapes at once", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const fetchImpl = (async () => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight--;
+      return new Response(JINA_MD, { status: 200 });
+    }) as unknown as typeof fetch;
+    const web = createWebClient({ scrapeConcurrency: 2, fetchImpl });
+    const urls = Array.from({ length: 6 }, (_, i) => `https://x${i}.example.com`);
+    const results = await web.scrapeMany(urls);
+    expect(results).toHaveLength(6);
+    expect(results.every((r) => r.status === "fulfilled")).toBe(true);
+    expect(peak).toBeLessThanOrEqual(2);
+  });
 });
