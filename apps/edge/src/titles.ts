@@ -14,8 +14,14 @@ export const TITLE_SYSTEM_PROMPT =
   "Summarize the user's request as a short 3-6 word title. " +
   "Output ONLY the title, no quotes, no punctuation at the end, Title Case.";
 
-/** Hard ceiling on title-gen output. A 3-6 word title needs only a handful of tokens. */
-const TITLE_MAX_TOKENS = 24;
+/**
+ * Token budget for the title-gen call. Gemini 3 (and other "thinking" models) spend
+ * tokens on internal reasoning BEFORE emitting output, so a tiny budget (e.g. 24) gets
+ * fully consumed by thinking and yields zero answer tokens — an empty title that falls
+ * back to the raw truncated prompt. Give it ample room; `sanitizeTitle` still caps the
+ * actual stored title at MAX_TITLE_CHARS, so a larger budget only buys thinking headroom.
+ */
+const TITLE_MAX_TOKENS = 512;
 
 /**
  * Normalize a raw model (or fallback) string into a clean sidebar title: strip
