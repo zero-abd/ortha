@@ -551,6 +551,16 @@ export function App() {
           <span>Skills</span>
         </button>
 
+        <button className="discover-btn" onClick={() => { setSidebarOpen(false); setConnectorsOpen(true); }}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M9 2v4" />
+            <path d="M15 2v4" />
+            <rect x="6" y="6" width="12" height="6" rx="2" />
+            <path d="M12 12v4a4 4 0 0 1-4 4H7" />
+          </svg>
+          <span>Connectors</span>
+        </button>
+
         <button className="discover-btn" onClick={() => { setSidebarOpen(false); setBatchOpen(true); }}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <line x1="8" y1="6" x2="21" y2="6" />
