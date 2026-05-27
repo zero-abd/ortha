@@ -19,6 +19,7 @@ import {
   isSystemPromptEcho,
   SYSTEM_PROMPT_REFUSAL,
 } from "./guards.js";
+import { reconstructHistory } from "./history.js";
 import { buildLivePorts } from "./ports.js";
 import { createSqlRawStore, RAW_BLOBS_DDL } from "./raw-store.js";
 import { DurableSpendStore, SESSION_SPEND_DDL, WORKSPACE_SPEND_DDL } from "./spend-store.js";
@@ -135,11 +136,13 @@ export class ConversationDO implements DurableObject {
   private async sendHistory(ws: WebSocket): Promise<void> {
     await this.init();
     const msgs = await this.store.loadWindow(this.conversationId, HISTORY_BUDGET_TOKENS);
-    // The transcript now includes tool-call plumbing (assistant tool-call turns +
-    // tool results) for cross-turn expand. The UI only wants real chat turns, so
-    // show user messages and assistant messages that actually said something.
-    const visible = msgs.filter((m) => m.role === "user" || (m.role === "assistant" && m.content.trim().length > 0));
-    ws.send(JSON.stringify({ type: "history", messages: visible.map((m) => ({ role: m.role, content: m.content })) }));
+    // The transcript stores tool-call plumbing (assistant tool-call turns + tool
+    // results) alongside the real chat turns. Reconstruct the per-turn agent-trace
+    // blocks from that plumbing so a re-opened conversation shows the collapsible
+    // tool-call lines (api · path · status, with the requestId for "Open raw") just
+    // as they appeared live — not only the plain user/assistant text.
+    const messages = reconstructHistory(msgs);
+    ws.send(JSON.stringify({ type: "history", messages }));
   }
 
   private async onMessage(ws: WebSocket, ev: MessageEvent): Promise<void> {

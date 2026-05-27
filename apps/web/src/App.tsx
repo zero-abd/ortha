@@ -493,7 +493,7 @@ export function App() {
     setMessages(
       hist
         .filter((m) => m.role === "user" || m.role === "assistant")
-        .map((m, i) => ({ id: `h_${i}`, role: m.role as "user" | "assistant", content: m.content, steps: [], streaming: false })),
+        .map((m, i) => ({ id: `h_${i}`, role: m.role as "user" | "assistant", content: m.content, steps: m.steps ?? [], streaming: false })),
     );
   };
 

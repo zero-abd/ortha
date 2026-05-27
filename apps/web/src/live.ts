@@ -1,7 +1,14 @@
 import type { PermissionResponse, TraceEvent } from "@ortha/contracts";
 import { getDeviceId } from "./lib/config.ts";
 import { getToken } from "./lib/auth.ts";
-import type { TurnDeps } from "./types.ts";
+import type { TraceStep, TurnDeps } from "./types.ts";
+
+/** A restored history turn: plain bubble plus the reconstructed trace steps above it. */
+export interface HistoryMessage {
+  role: string;
+  content: string;
+  steps?: TraceStep[];
+}
 
 export interface LiveDeps extends TurnDeps {
   conversationId: string;
@@ -80,14 +87,19 @@ export function runLiveTurn(text: string, deps: LiveDeps, apiBase: string, image
   });
 }
 
-/** Connect to a conversation's stream, grab its persisted history, and close. */
-export function fetchHistory(conversationId: string, apiBase: string): Promise<{ role: string; content: string }[]> {
+/**
+ * Connect to a conversation's stream, grab its persisted history, and close. The
+ * server reconstructs each turn's agent-trace steps from the stored transcript, so a
+ * re-opened conversation carries its collapsible tool-call blocks (api · path ·
+ * status, requestId for "Open raw"), not just the plain user/assistant text.
+ */
+export function fetchHistory(conversationId: string, apiBase: string): Promise<HistoryMessage[]> {
   return new Promise((resolve) => {
     const wsBase = apiBase.replace(/^http/, "ws");
     const token = encodeURIComponent(getToken() ?? "");
     const device = encodeURIComponent(getDeviceId());
     const ws = new WebSocket(`${wsBase}/api/conversations/${encodeURIComponent(conversationId)}/stream?token=${token}&device=${device}`);
-    const finish = (msgs: { role: string; content: string }[]) => {
+    const finish = (msgs: HistoryMessage[]) => {
       clearTimeout(timer);
       try { ws.close(); } catch { /* noop */ }
       resolve(msgs);
