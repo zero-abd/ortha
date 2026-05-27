@@ -44,12 +44,12 @@ describe("transformPublicSkills", () => {
     });
   });
 
-  it("caps SKILL.md content at ~6000 chars", () => {
-    const big = "x".repeat(7000);
+  it("caps SKILL.md content at ~25000 chars", () => {
+    const big = "x".repeat(26000);
     const out = transformPublicSkills({
       skills: [rawSkill({ files: [{ filePath: "SKILL.md", content: big }] })],
     });
-    expect(out[0]!.content).toHaveLength(6000);
+    expect(out[0]!.content).toHaveLength(25000);
   });
 
   it("sorts featured first, then by installCount desc", () => {

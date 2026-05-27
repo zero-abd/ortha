@@ -14,8 +14,9 @@ import { deleteSkill, getPublicSkills, listSkills, type PublicSkill, saveSkill, 
  * Reuses the .settings / .settings-scrim modal shell (mirrors DiscoverModal).
  */
 
-/** Cap a public skill's content before sending it as a prompt. */
-const MAX_PUBLIC_PROMPT_CHARS = 6000;
+/** Cap a public skill's content before sending it as a prompt. Matches the server's
+ *  MAX_PUBLIC_SKILL_CONTENT so the full SKILL.md (longest catalog skill is ~22k) runs. */
+const MAX_PUBLIC_PROMPT_CHARS = 25000;
 
 /** Extract unique `{var}` placeholder names from a template, in first-seen order. */
 export function extractVars(template: string): string[] {
