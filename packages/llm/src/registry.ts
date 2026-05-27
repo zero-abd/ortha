@@ -8,22 +8,13 @@ import type { ModelInfo, ModelRegistry } from "@ortha/contracts";
 // Approximate public list prices, rounded to whole cents per million tokens.
 // (e.g. $3.00 / Mtok input -> 300 cents). Kept conservative & easy to update.
 const MODELS: readonly ModelInfo[] = [
-  // --- Gemini (OpenAI-compat). Free tier available; tool-capable. ---
+  // --- Gemini (OpenAI-compat). Tool-capable. 3-series only (no 2.5). ---
   {
-    id: "gemini-2.5-flash",
+    id: "gemini-3-flash-preview",
     provider: "gemini",
-    displayName: "Gemini 2.5 Flash",
-    inputPerMTokensCents: 30, // ~$0.30 / Mtok
+    displayName: "Gemini 3 Flash",
+    inputPerMTokensCents: 30, // ~$0.30 / Mtok (approx; update at GA)
     outputPerMTokensCents: 250, // ~$2.50 / Mtok
-    supportsToolUse: true,
-    free: true,
-  },
-  {
-    id: "gemini-2.5-flash-lite",
-    provider: "gemini",
-    displayName: "Gemini 2.5 Flash-Lite",
-    inputPerMTokensCents: 10, // ~$0.10 / Mtok
-    outputPerMTokensCents: 40, // ~$0.40 / Mtok
     supportsToolUse: true,
     free: true,
   },
@@ -89,7 +80,7 @@ const MODELS: readonly ModelInfo[] = [
   },
 ];
 
-const DEFAULT_MODEL_ID = "gemini-2.5-flash";
+const DEFAULT_MODEL_ID = "gemini-3-flash-preview";
 
 export interface CreateModelRegistryOptions {
   /** Replace the curated list entirely (advanced / testing). */

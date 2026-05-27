@@ -9,7 +9,7 @@ export interface ProviderInfo {
 }
 
 export const PROVIDERS: ProviderInfo[] = [
-  { id: "gemini", label: "Gemini", defaultModel: "gemini-2.5-flash" },
+  { id: "gemini", label: "Gemini", defaultModel: "gemini-3-flash-preview" },
   { id: "anthropic", label: "Claude", defaultModel: "claude-3-5-haiku-latest" },
   { id: "openai", label: "OpenAI", defaultModel: "gpt-4o-mini" },
   { id: "openrouter", label: "OpenRouter", defaultModel: "meta-llama/llama-3.3-70b-instruct:free" },
@@ -28,5 +28,5 @@ export function providerOfModel(modelId: string): string {
 
 /** Default model id for a provider, falling back to Gemini Flash. */
 export function defaultModelOf(providerId: string): string {
-  return PROVIDERS.find((p) => p.id === providerId)?.defaultModel ?? "gemini-2.5-flash";
+  return PROVIDERS.find((p) => p.id === providerId)?.defaultModel ?? "gemini-3-flash-preview";
 }

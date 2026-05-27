@@ -35,7 +35,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sessionCapCents: 500,
   perCallWarnCents: 25,
   monthlyCapCents: 10_000,
-  model: "gemini-2.5-flash",
+  model: "gemini-3-flash-preview",
   theme: "system",
   cacheTtlSeconds: 300,
 };
