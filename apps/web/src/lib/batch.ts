@@ -1,28 +1,28 @@
-// Batch mode core: run one saved skill across many rows of input.
+// Batch mode core: run one saved skill across many inputs.
 //
-// A skill is a parameterized prompt template like "Enrich {company}: find the
-// CEO and recent news." Batch mode fills that template once per row of pasted
-// values, runs each as its own turn (in its own ephemeral conversation, so they
-// can run concurrently without contending), and collects each turn's answer +
-// cost + status into a table the user can export.
+// A skill is a reusable prompt (its SKILL.md). Batch mode runs that skill once
+// per input line — each line is free text appended to the skill prompt, exactly
+// like running the skill once from the composer (see `skillPrompt`). Each run is
+// its own ephemeral conversation, so they run concurrently without contending,
+// and each run's answer + cost + status is collected into an exportable table.
 //
 // Everything here is pure and transport-agnostic: the React modal injects the
-// actual turn runner. That keeps the parsing, the event→result fold, the
+// actual turn runner. That keeps the prompt building, the event→result fold, the
 // concurrency pool, and the CSV serializer unit-testable without a WebSocket.
 
 import type { TraceEvent } from "@ortha/contracts";
 
-/** One pasted row, mapped onto the skill's `{var}` names (first-seen order). */
-export interface BatchRow {
-  /** The original pasted line, kept for display/debugging. */
-  line: string;
-  /** Variable name -> filled value. */
-  values: Record<string, string>;
-  /** Values in `vars` order — what the results table and CSV show as inputs. */
-  cells: string[];
+/**
+ * Build the prompt for one skill run. Mirrors the composer's `/skill` path: the
+ * skill's full text, with the free-text input (if any) appended below it. Shared
+ * so a single run and a batch row produce byte-identical prompts.
+ */
+export function skillPrompt(template: string, input: string): string {
+  const trimmed = input.trim();
+  return trimmed ? `${template}\n\n${trimmed}` : template;
 }
 
-/** The folded outcome of running a single row's turn. */
+/** The folded outcome of running a single input's turn. */
 export interface RowResult {
   /** The assistant's final answer text (all streamed tokens concatenated). */
   answer: string;
@@ -34,31 +34,16 @@ export interface RowResult {
   error?: string;
 }
 
-/** Split a pasted line into cells: tab-delimited if any tab is present, else comma. */
-function splitCells(line: string): string[] {
-  return (line.includes("\t") ? line.split("\t") : line.split(",")).map((c) => c.trim());
-}
-
 /**
- * Parse pasted text into rows keyed by the skill's variables.
- *
- * - Blank lines are dropped.
- * - A single-variable skill treats each whole line as that variable's value
- *   (so commas inside the value are preserved).
- * - A multi-variable skill splits each line into cells (tab- or comma-delimited)
- *   and maps them onto the variables in first-seen order. Extra cells are
- *   ignored; missing cells become "".
+ * Parse pasted text into inputs — one run per non-blank line. Surrounding
+ * whitespace is trimmed and blank lines are dropped; the whole line is the input
+ * (commas and other punctuation are preserved — there are no fields to split on).
  */
-export function parseRows(text: string, vars: string[]): BatchRow[] {
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
-  return lines.map((line) => {
-    const cells = vars.length <= 1 ? [line] : splitCells(line);
-    const values: Record<string, string> = {};
-    vars.forEach((v, i) => {
-      values[v] = (cells[i] ?? "").trim();
-    });
-    return { line, values, cells: vars.map((v) => values[v] ?? "") };
-  });
+export function parseRows(text: string): string[] {
+  return text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
 }
 
 /**
@@ -111,17 +96,17 @@ function dollars(cents: number): string {
 }
 
 /**
- * Serialize a finished (or partial) batch to CSV: the skill's variable columns,
- * then the answer, cost, and status. Rows still pending render as empty result
- * cells so an in-progress export is still well-formed.
+ * Serialize a finished (or partial) batch to CSV: the input, then the answer,
+ * cost, and status. Rows still pending render as empty result cells so an
+ * in-progress export is still well-formed.
  */
-export function batchToCSV(vars: string[], rows: { cells: string[]; result?: RowResult | undefined }[]): string {
-  const header = [...vars, "result", "cost_usd", "status"].map(csvField).join(",");
+export function batchToCSV(rows: { input: string; result?: RowResult | undefined }[]): string {
+  const header = ["input", "result", "cost_usd", "status"].map(csvField).join(",");
   const body = rows
     .map((r) => {
       const res = r.result;
       const tail = res ? [res.answer, dollars(res.costCents), res.ok ? "ok" : (res.error ?? "error")] : ["", "", "pending"];
-      return [...r.cells, ...tail].map(csvField).join(",");
+      return [r.input, ...tail].map(csvField).join(",");
     })
     .join("\n");
   return body ? `${header}\n${body}` : header;

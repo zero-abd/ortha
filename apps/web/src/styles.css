@@ -90,10 +90,6 @@ input, textarea, select { font: inherit; color: inherit; }
 .sidebar__brand { display: flex; align-items: center; gap: 9px; padding: 4px 6px 6px; }
 .brand__word { font-size: 18px; font-weight: 600; letter-spacing: -0.02em; color: var(--ink); }
 
-.acct-switch { display: flex; align-items: center; gap: 9px; width: 100%; padding: 8px 10px; border: 1px solid var(--hairline); border-radius: var(--radius-sm); background: var(--surface); color: var(--ink-soft); font-size: 13.5px; transition: background 0.12s, border-color 0.12s; }
-.acct-switch:hover { background: var(--hover); border-color: var(--hairline-strong); }
-.acct-switch__chev { margin-left: auto; color: var(--faint); font-size: 11px; }
-
 .new-chat { display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 11px; border-radius: var(--radius-sm); background: var(--primary); color: var(--primary-ink); font-size: 13.5px; font-weight: 500; transition: opacity 0.12s; }
 .new-chat:hover { opacity: 0.9; }
 

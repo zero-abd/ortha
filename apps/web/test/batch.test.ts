@@ -1,42 +1,30 @@
 import { describe, expect, it } from "vitest";
 import type { TraceEvent } from "@ortha/contracts";
-import { batchToCSV, collectRow, parseRows, runPool, type RowResult } from "../src/lib/batch.ts";
+import { batchToCSV, collectRow, parseRows, runPool, skillPrompt, type RowResult } from "../src/lib/batch.ts";
+
+describe("skillPrompt", () => {
+  it("appends the trimmed input below the skill template", () => {
+    expect(skillPrompt("Find the CEO.", "stripe.com")).toBe("Find the CEO.\n\nstripe.com");
+    expect(skillPrompt("Find the CEO.", "  stripe.com  ")).toBe("Find the CEO.\n\nstripe.com");
+  });
+
+  it("returns the bare template when there is no input", () => {
+    expect(skillPrompt("Find the CEO.", "")).toBe("Find the CEO.");
+    expect(skillPrompt("Find the CEO.", "   ")).toBe("Find the CEO.");
+  });
+});
 
 describe("parseRows", () => {
-  it("treats each whole line as the value for a single-variable skill", () => {
-    const rows = parseRows("stripe.com\nopenai.com", ["domain"]);
-    expect(rows).toEqual([
-      { line: "stripe.com", values: { domain: "stripe.com" }, cells: ["stripe.com"] },
-      { line: "openai.com", values: { domain: "openai.com" }, cells: ["openai.com"] },
-    ]);
+  it("treats each whole line as one input", () => {
+    expect(parseRows("stripe.com\nopenai.com")).toEqual(["stripe.com", "openai.com"]);
   });
 
-  it("keeps commas inside a single-variable value", () => {
-    const rows = parseRows("Stripe, Inc.", ["company"]);
-    expect(rows[0]!.values).toEqual({ company: "Stripe, Inc." });
-  });
-
-  it("splits comma-delimited cells across multiple variables in order", () => {
-    const rows = parseRows("Stripe,payments\nOpenAI,ai", ["company", "sector"]);
-    expect(rows[0]!.values).toEqual({ company: "Stripe", sector: "payments" });
-    expect(rows[1]!.cells).toEqual(["OpenAI", "ai"]);
-  });
-
-  it("prefers tab delimiting when a tab is present (so values may contain commas)", () => {
-    const rows = parseRows("Stripe, Inc.\tpayments", ["company", "sector"]);
-    expect(rows[0]!.values).toEqual({ company: "Stripe, Inc.", sector: "payments" });
-  });
-
-  it("pads missing cells with empty strings and ignores extras", () => {
-    const rows = parseRows("OnlyName", ["company", "sector"]);
-    expect(rows[0]!.values).toEqual({ company: "OnlyName", sector: "" });
-    const extra = parseRows("a,b,c", ["x", "y"]);
-    expect(extra[0]!.cells).toEqual(["a", "b"]);
+  it("keeps commas and punctuation inside a line (no field splitting)", () => {
+    expect(parseRows("Stripe, Inc.\nOpenAI, the lab")).toEqual(["Stripe, Inc.", "OpenAI, the lab"]);
   });
 
   it("drops blank lines and trims surrounding whitespace", () => {
-    const rows = parseRows("  stripe.com  \n\n   \nopenai.com\n", ["domain"]);
-    expect(rows.map((r) => r.values.domain)).toEqual(["stripe.com", "openai.com"]);
+    expect(parseRows("  stripe.com  \n\n   \nopenai.com\n")).toEqual(["stripe.com", "openai.com"]);
   });
 });
 
@@ -105,29 +93,29 @@ describe("runPool", () => {
 });
 
 describe("batchToCSV", () => {
-  it("emits variable columns plus result/cost/status with a header", () => {
-    const rows: { cells: string[]; result?: RowResult }[] = [
-      { cells: ["Stripe"], result: { answer: "Patrick Collison", costCents: 3, ok: true } },
-      { cells: ["OpenAI"], result: { answer: "Sam Altman", costCents: 5, ok: true } },
+  it("emits an input column plus result/cost/status with a header", () => {
+    const rows: { input: string; result?: RowResult }[] = [
+      { input: "Stripe", result: { answer: "Patrick Collison", costCents: 3, ok: true } },
+      { input: "OpenAI", result: { answer: "Sam Altman", costCents: 5, ok: true } },
     ];
-    expect(batchToCSV(["company"], rows)).toBe(
-      "company,result,cost_usd,status\nStripe,Patrick Collison,0.03,ok\nOpenAI,Sam Altman,0.05,ok",
+    expect(batchToCSV(rows)).toBe(
+      "input,result,cost_usd,status\nStripe,Patrick Collison,0.03,ok\nOpenAI,Sam Altman,0.05,ok",
     );
   });
 
   it("quotes fields containing commas, quotes, or newlines", () => {
-    const rows = [{ cells: ["Stripe, Inc."], result: { answer: 'He said "hi"\nbye', costCents: 0, ok: true } }];
-    const csv = batchToCSV(["company"], rows);
+    const rows = [{ input: "Stripe, Inc.", result: { answer: 'He said "hi"\nbye', costCents: 0, ok: true } }];
+    const csv = batchToCSV(rows);
     expect(csv).toContain('"Stripe, Inc."');
     expect(csv).toContain('"He said ""hi""\nbye"');
   });
 
   it("renders pending rows and failures distinctly", () => {
-    const rows: { cells: string[]; result?: RowResult }[] = [
-      { cells: ["A"] },
-      { cells: ["B"], result: { answer: "", costCents: 0, ok: false, error: "TIMEOUT: slow" } },
+    const rows: { input: string; result?: RowResult }[] = [
+      { input: "A" },
+      { input: "B", result: { answer: "", costCents: 0, ok: false, error: "TIMEOUT: slow" } },
     ];
-    const csv = batchToCSV(["x"], rows);
+    const csv = batchToCSV(rows);
     expect(csv).toContain("A,,,pending");
     expect(csv).toContain("B,,0.00,TIMEOUT: slow");
   });

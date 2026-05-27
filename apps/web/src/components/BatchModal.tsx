@@ -1,14 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { listSkills, type Skill } from "../lib/api.ts";
-import { extractVars, fillTemplate } from "./SkillsModal.tsx";
-import { batchToCSV, parseRows, runPool, type BatchRow, type RowResult } from "../lib/batch.ts";
+import { batchToCSV, parseRows, runPool, skillPrompt, type RowResult } from "../lib/batch.ts";
 
 /**
- * Batch mode — run one saved skill across many rows of input.
+ * Batch mode — run one saved skill across many inputs.
  *
- * Flow: pick a skill -> paste rows (one run per line) -> run. Each row fills the
- * skill template and runs as its own isolated turn (App injects `runRow`), with
- * a few in flight at once. Results stream into a table you can export as CSV.
+ * Flow: pick a skill -> paste inputs (one run per line) -> run. Each line is the
+ * free-text input for one run, appended to the skill prompt exactly like a single
+ * `/skill` run (shared `skillPrompt`). Each runs as its own isolated turn (App
+ * injects `runRow`), a few in flight at once; results stream into a table you can
+ * export as CSV.
  *
  * Reuses the .settings modal shell (mirrors SkillsModal / DiscoverModal).
  */
@@ -21,7 +22,7 @@ const CONCURRENCY = 3;
 
 type RowStatus = "queued" | "running" | "done" | "error";
 interface RunRow {
-  row: BatchRow;
+  input: string;
   status: RowStatus;
   result?: RowResult;
 }
@@ -29,7 +30,7 @@ interface RunRow {
 interface Props {
   open: boolean;
   onClose: () => void;
-  /** Run one filled prompt as an isolated turn, resolving to its folded result.
+  /** Run one prompt as an isolated turn, resolving to its folded result.
    *  `label` is a short human title for the row (shown in the Agents panel). */
   runRow: (prompt: string, label?: string) => Promise<RowResult>;
 }
@@ -78,14 +79,14 @@ export function BatchModal({ open, onClose, runRow }: Props) {
     return () => document.removeEventListener("keydown", onKey);
   }, [open, onClose, running]);
 
-  const vars = useMemo(() => (skill ? extractVars(skill.template) : []), [skill]);
-  const parsed = useMemo(() => (skill ? parseRows(rowsText, vars).slice(0, MAX_ROWS) : []), [skill, rowsText, vars]);
-
   if (!open) return null;
 
+  const allInputs = parseRows(rowsText);
+  const inputs = allInputs.slice(0, MAX_ROWS);
+
   const start = async () => {
-    if (!skill || parsed.length === 0 || running) return;
-    const initial: RunRow[] = parsed.map((row) => ({ row, status: "queued" }));
+    if (!skill || inputs.length === 0 || running) return;
+    const initial: RunRow[] = inputs.map((input) => ({ input, status: "queued" }));
     setRuns(initial);
     setRunning(true);
 
@@ -93,11 +94,11 @@ export function BatchModal({ open, onClose, runRow }: Props) {
       setRuns((prev) => prev.map((r, j) => (j === i ? { ...r, ...next } : r)));
 
     await runPool(
-      parsed,
-      async (row, i) => {
+      inputs,
+      async (input, i) => {
         patch(i, { status: "running" });
         try {
-          const result = await runRow(fillTemplate(skill.template, row.values), row.cells.join(" · ") || skill.name);
+          const result = await runRow(skillPrompt(skill.template, input), input || skill.name);
           patch(i, { status: result.ok ? "done" : "error", result });
         } catch (err) {
           patch(i, {
@@ -120,7 +121,7 @@ export function BatchModal({ open, onClose, runRow }: Props) {
   const totalCents = runs.reduce((sum, r) => sum + (r.result?.costCents ?? 0), 0);
   const doneCount = runs.filter((r) => r.status === "done" || r.status === "error").length;
   const hasResults = runs.length > 0;
-  const csv = () => batchToCSV(vars, runs.map((r) => ({ cells: r.row.cells, result: r.result })));
+  const csv = () => batchToCSV(runs.map((r) => ({ input: r.input, result: r.result })));
 
   const copyCsv = () => {
     void navigator.clipboard?.writeText(csv()).then(
@@ -132,7 +133,7 @@ export function BatchModal({ open, onClose, runRow }: Props) {
     );
   };
 
-  const title = !skill ? "Batch run" : hasResults ? `Batch · ${skill.name}` : `Batch · ${skill.name}`;
+  const title = !skill ? "Batch run" : `Batch · ${skill.name}`;
 
   return (
     <div className="settings-scrim" onClick={() => !running && onClose()}>
@@ -167,40 +168,35 @@ export function BatchModal({ open, onClose, runRow }: Props) {
             </div>
           )}
 
-          {/* Step 2 — paste rows */}
+          {/* Step 2 — paste inputs (one run per line) */}
           {skill && !hasResults && (
             <div className="settings__section">
               <div className="field">
                 <span className="settings__sublabel">Skill</span>
                 <div className="skill__preview">{skill.template}</div>
                 <span className="settings__help">
-                  {vars.length === 0
-                    ? "This skill has no fields, so there's nothing to vary — add a {field} to batch it."
-                    : vars.length === 1
-                      ? <>One value per line for <span className="mono">{`{${vars[0]}}`}</span>.</>
-                      : <>One row per line; separate {vars.length} values by comma or tab, in order: {vars.map((v) => <span className="mono" key={v}>{`{${v}}`} </span>)}</>}
+                  One input per line — each line runs <strong>{skill.name}</strong> once, with that line added to the prompt as its input.
                 </span>
               </div>
               <div className="field">
-                <span className="settings__sublabel">Rows</span>
+                <span className="settings__sublabel">Inputs</span>
                 <textarea
                   className="input skill__template"
-                  placeholder={vars.length <= 1 ? "stripe.com\nopenai.com\nanthropic.com" : "Stripe, payments\nOpenAI, ai"}
+                  placeholder={"stripe.com\nopenai.com\nanthropic.com"}
                   value={rowsText}
                   rows={7}
                   onChange={(e) => setRowsText(e.target.value)}
-                  disabled={vars.length === 0}
                 />
                 <span className="settings__help">
-                  {parsed.length} {parsed.length === 1 ? "row" : "rows"}
-                  {parseRows(rowsText, vars).length > MAX_ROWS && ` (capped at ${MAX_ROWS})`}
+                  {inputs.length} {inputs.length === 1 ? "run" : "runs"}
+                  {allInputs.length > MAX_ROWS && ` (capped at ${MAX_ROWS})`}
                   {" · "}cost approvals auto-confirmed; write actions skipped.
                 </span>
               </div>
               <div className="skill__formfoot">
                 <button className="btn-sm" onClick={() => setSkill(null)}>Back</button>
-                <button className="btn-sm btn-sm--accent" disabled={parsed.length === 0} onClick={() => void start()}>
-                  Run {parsed.length || ""} {parsed.length === 1 ? "row" : "rows"}
+                <button className="btn-sm btn-sm--accent" disabled={inputs.length === 0} onClick={() => void start()}>
+                  Run {inputs.length || ""} {inputs.length === 1 ? "run" : "runs"}
                 </button>
               </div>
             </div>
@@ -211,7 +207,7 @@ export function BatchModal({ open, onClose, runRow }: Props) {
             <div className="settings__section">
               <div className="batch__statusbar">
                 <span className="settings__help">
-                  {running ? `Running… ${doneCount}/${runs.length} done` : `Done · ${runs.length} ${runs.length === 1 ? "row" : "rows"}`}
+                  {running ? `Running… ${doneCount}/${runs.length} done` : `Done · ${runs.length} ${runs.length === 1 ? "run" : "runs"}`}
                   {" · "}${(totalCents / 100).toFixed(2)} total
                 </span>
                 <div className="rcard__actions">
@@ -227,7 +223,7 @@ export function BatchModal({ open, onClose, runRow }: Props) {
                 <table className="rcard__table">
                   <thead>
                     <tr>
-                      {vars.map((v) => <th key={v}>{v}</th>)}
+                      <th>input</th>
                       <th>result</th>
                       <th>cost</th>
                       <th>status</th>
@@ -236,7 +232,7 @@ export function BatchModal({ open, onClose, runRow }: Props) {
                   <tbody>
                     {runs.map((r, i) => (
                       <tr key={i}>
-                        {r.row.cells.map((c, j) => <td key={j} title={c}>{c}</td>)}
+                        <td title={r.input}>{r.input}</td>
                         <td className="batch__resultcell" title={r.result?.error ?? r.result?.answer ?? ""}>
                           {r.result?.error ? <span className="batch__err">{r.result.error}</span> : (r.result?.answer ?? "")}
                         </td>

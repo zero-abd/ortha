@@ -15,7 +15,7 @@ import { SideEffectModal } from "./components/SideEffectModal.tsx";
 import { SkillsModal } from "./components/SkillsModal.tsx";
 import { ConnectorsModal } from "./components/ConnectorsModal.tsx";
 import { BatchModal } from "./components/BatchModal.tsx";
-import { collectRow, type RowResult } from "./lib/batch.ts";
+import { collectRow, skillPrompt, type RowResult } from "./lib/batch.ts";
 import { type Attachment, buildPromptWithAttachments, isTextFile } from "./lib/attachments.ts";
 import { TraceBlock } from "./components/TraceBlock.tsx";
 import { Sources } from "./components/Sources.tsx";
@@ -447,7 +447,7 @@ export function App() {
     // after the trigger rides along as the skill's input (else the agent just asks).
     runSkill: (skill, arg) => {
       const input = (arg ?? "").trim();
-      const prompt = input ? `${skill.template}\n\n${input}` : skill.template;
+      const prompt = skillPrompt(skill.template, input);
       void send(prompt, undefined, { displayText: `Run skill: ${skill.name}${input ? ` — ${input}` : ""}` });
     },
   };
@@ -585,11 +585,6 @@ export function App() {
             <line x1="3" y1="18" x2="3.01" y2="18" />
           </svg>
           <span>Batch run</span>
-        </button>
-
-        <button className="acct-switch">
-          <span>◐ Personal Account</span>
-          <span className="acct-switch__chev">▾</span>
         </button>
 
         <button className="new-chat" onClick={newChat}>+ New chat</button>
