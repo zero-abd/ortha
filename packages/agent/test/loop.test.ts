@@ -724,15 +724,15 @@ describe("runAgentTurn — web_search budget + dedup", () => {
         return [{ title: q, url: `https://e.com/${calls}`, snippet: "s" }];
       },
     });
-    // Six DISTINCT searches; default cap is 4 → 5th and 6th are refused.
-    const searchTurns = Array.from({ length: 6 }, (_, i) => [
+    // Ten DISTINCT searches; default cap is 8 → the 9th and 10th are refused.
+    const searchTurns = Array.from({ length: 10 }, (_, i) => [
       { type: "tool_call_request", id: `w${i}`, name: "web_search", args: { query: `distinct query ${i}` } } as LLMEvent,
       { type: "done", stopReason: "tool_use" } as LLMEvent,
     ]);
     const { contents, onMessage } = captureToolContent();
     const llm = makeTurnScriptedLLM([...searchTurns, [{ type: "token", text: "done" }, { type: "done", stopReason: "end" }]]);
-    await collect(baseDeps({ llm, web, onMessage, maxIterations: 10 }));
-    expect(calls).toBe(4); // budget cap held
+    await collect(baseDeps({ llm, web, onMessage, maxIterations: 14 }));
+    expect(calls).toBe(8); // budget cap held
     expect(contents.some((c) => c.includes("Search budget reached"))).toBe(true);
   });
 
@@ -744,13 +744,14 @@ describe("runAgentTurn — web_search budget + dedup", () => {
         return [{ title: q, url: `https://e.com/${calls}`, snippet: "s" }];
       },
     });
-    const searchTurns = Array.from({ length: 6 }, (_, i) => [
+    // Twelve distinct searches: over the base cap (8) but within deep-research's (16).
+    const searchTurns = Array.from({ length: 12 }, (_, i) => [
       { type: "tool_call_request", id: `w${i}`, name: "web_search", args: { query: `distinct query ${i}` } } as LLMEvent,
       { type: "done", stopReason: "tool_use" } as LLMEvent,
     ]);
     const llm = makeTurnScriptedLLM([...searchTurns, [{ type: "token", text: "done" }, { type: "done", stopReason: "end" }]]);
-    await collect(baseDeps({ llm, web, deepResearch: true, maxIterations: 10 }));
-    expect(calls).toBe(6); // all six fit under the deep-research cap (8)
+    await collect(baseDeps({ llm, web, deepResearch: true, maxIterations: 16 }));
+    expect(calls).toBe(12); // all twelve fit under the deep-research cap (16)
   });
 });
 

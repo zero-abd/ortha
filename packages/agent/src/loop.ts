@@ -86,7 +86,13 @@ export interface AgentInput {
 // so a low cap (1024) gets eaten by reasoning on a heavy multi-search turn and the
 // answer truncates mid-sentence. Keep this generous so research answers complete.
 const DEFAULT_MAX_TOKENS = 8192;
-const DEFAULT_MAX_ITERATIONS = 8;
+// Tool-using iterations per turn. Kept generous because multi-entity research
+// ("find emails for the founders of N companies") is inherently many calls —
+// company/people lookup + an email-finder per founder can be 20+ run_tool steps.
+// Simple turns stop early on their own (the model answers and ends), and the
+// spend cap + permission gates bound cost, so a high ceiling only unblocks the
+// hard tasks; it doesn't make easy ones expensive.
+const DEFAULT_MAX_ITERATIONS = 24;
 /** How many times we nudge a model that narrates a next tool action without
  *  emitting the call, before accepting its turn as final. Bounds wasted turns. */
 const MAX_AUTO_CONTINUE = 2;
@@ -110,9 +116,11 @@ function looksLikeUnfulfilledIntent(text: string): boolean {
 const CONTINUE_NUDGE =
   "Continue now: make the tool call you just described (search_tools / get_tool_details / run_tool), or give your final answer in plain language. Do not reply again with only a description of what you intend to do.";
 
-/** Per-turn cap on free web_search calls; raised when deep-research mode is requested. */
-const WEB_SEARCH_BUDGET = 4;
-const WEB_SEARCH_BUDGET_DEEP = 8;
+/** Per-turn cap on free web_search calls; raised when deep-research mode is requested.
+ *  Generous so discovery (find the companies, find each one's people) doesn't exhaust
+ *  the budget before the agent runs the catalog endpoints that actually pull the data. */
+const WEB_SEARCH_BUDGET = 8;
+const WEB_SEARCH_BUDGET_DEEP = 16;
 
 /** Normalize a query so near-identical web searches (case/whitespace) collapse to one. */
 function normalizeQuery(q: string): string {
