@@ -710,6 +710,7 @@ export function App() {
                   model={model}
                   onModelChange={changeModel}
                   autoFocus
+                  tall
                 />
               </div>
               <ExampleChips onPick={(p) => void send(p)} />
@@ -959,6 +960,7 @@ function AskBox({
   autoFocus,
   attached = [],
   onAttach,
+  tall,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -978,6 +980,8 @@ function AskBox({
   autoFocus?: boolean;
   attached?: string[];
   onAttach?: (images: string[]) => void;
+  /** Taller initial input for the centered home screen (Claude-style). */
+  tall?: boolean;
 }) {
   // The slash menu is shown when the draft starts with "/" and isn't yet a
   // full "command + space + arg" line being typed past the menu. We keep it
@@ -1118,7 +1122,7 @@ function AskBox({
       {!onAttachmentsChange && attachNotice && (
         <div className="attach-tray"><span className="attach-notice">{attachNotice}</span></div>
       )}
-      <div className="ask">
+      <div className={`ask${tall ? " ask--tall" : ""}`}>
         {canAttach && (
           <input
             ref={fileInputRef}

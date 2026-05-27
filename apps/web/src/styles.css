@@ -238,7 +238,9 @@ input, textarea, select { font: inherit; color: inherit; }
 :root[data-theme="dark"] .md .hljs-deletion { color: #ffdcd7; background-color: #67060c; }
 
 /* ── Welcome / first-run ───────────────────────────────────────────────── */
-.welcome { flex: 1; display: flex; flex-direction: column; align-items: center; padding: 7vh 24px 0; }
+/* Home (pre-chat) is vertically centered with a taller hero input, Claude-style; once a
+   conversation starts the composer drops to the bottom (.composer) at normal height. */
+.welcome { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; }
 .welcome__title { display: flex; align-items: center; gap: 12px; font-size: 30px; font-weight: 600; letter-spacing: -0.02em; color: var(--ink); margin: 0 0 28px; text-align: center; }
 .welcome__mark { display: inline-flex; flex: none; }
 .welcome__sub { font-size: 15px; color: var(--muted); margin: 8px 0 28px; text-align: center; }
@@ -263,6 +265,9 @@ input, textarea, select { font: inherit; color: inherit; }
 .ask--hero { max-width: 720px; margin: 0 auto 8px; }
 .ask__input { flex: 1; resize: none; background: none; border: none; outline: none; color: var(--ink); font-size: 15px; padding: 8px 0; max-height: 180px; }
 .ask__input::placeholder { color: var(--faint); }
+/* Taller hero input on the centered home screen (before the first message). */
+.ask--tall { padding: 14px 12px 14px 18px; }
+.ask--tall .ask__input { min-height: 58px; font-size: 16px; }
 .ask__send { width: 34px; height: 34px; flex: none; border-radius: var(--radius-sm); background: var(--primary); color: var(--primary-ink); display: flex; align-items: center; justify-content: center; font-size: 16px; transition: opacity 0.12s; }
 .ask__send:hover { opacity: 0.9; }
 .ask__send:disabled { opacity: 0.4; cursor: default; }
