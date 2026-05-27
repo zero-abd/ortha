@@ -429,6 +429,29 @@ describe("runAgentTurn — tool_search", () => {
     expect(search).toMatchObject({ query: "enrich company", resultCount: 1 });
     expect(events.at(-1)).toEqual({ type: "done", stopReason: "end" });
   });
+
+  it("guards an empty search_tools query instead of aborting the turn", async () => {
+    // A blank query would 400 the catalog ("Search prompt is required"). The guard must
+    // feed that back and let the turn continue — not propagate to a turn-killing error.
+    let searchCalls = 0;
+    const orthogonal = makeMockOrthogonalClient({
+      async search() {
+        searchCalls++;
+        return [];
+      },
+    });
+    const { contents, onMessage } = captureToolContent();
+    const llm = makeTurnScriptedLLM([
+      [{ type: "tool_call_request", id: "s0", name: "search_tools", args: { query: "" } }, { type: "done", stopReason: "tool_use" }],
+      [{ type: "token", text: "Answering with what I have." }, { type: "done", stopReason: "end" }],
+    ]);
+    const events = await collect(baseDeps({ llm, orthogonal, onMessage }));
+    expect(searchCalls).toBe(0); // never hit the catalog with an empty query
+    expect(events.some((e) => e.type === "tool_search")).toBe(false);
+    expect(events.some((e) => e.type === "error")).toBe(false); // turn did NOT abort
+    expect(contents.some((c) => c.includes("non-empty"))).toBe(true);
+    expect(events.at(-1)).toEqual({ type: "done", stopReason: "end" });
+  });
 });
 
 describe("runAgentTurn — continue after narrated intent", () => {
@@ -724,16 +747,16 @@ describe("runAgentTurn — web_search budget + dedup", () => {
         return [{ title: q, url: `https://e.com/${calls}`, snippet: "s" }];
       },
     });
-    // Six DISTINCT searches; default cap is 4 → 5th and 6th are refused.
-    const searchTurns = Array.from({ length: 6 }, (_, i) => [
+    // Ten DISTINCT searches; default cap is 8 → the 9th and 10th are refused.
+    const searchTurns = Array.from({ length: 10 }, (_, i) => [
       { type: "tool_call_request", id: `w${i}`, name: "web_search", args: { query: `distinct query ${i}` } } as LLMEvent,
       { type: "done", stopReason: "tool_use" } as LLMEvent,
     ]);
     const { contents, onMessage } = captureToolContent();
     const llm = makeTurnScriptedLLM([...searchTurns, [{ type: "token", text: "done" }, { type: "done", stopReason: "end" }]]);
-    await collect(baseDeps({ llm, web, onMessage, maxIterations: 10 }));
-    expect(calls).toBe(4); // budget cap held
-    expect(contents.some((c) => c.includes("Search budget reached"))).toBe(true);
+    await collect(baseDeps({ llm, web, onMessage, maxIterations: 14 }));
+    expect(calls).toBe(8); // budget cap held
+    expect(contents.some((c) => c.includes("Web-search budget reached"))).toBe(true);
   });
 
   it("raises the cap in deep-research mode", async () => {
@@ -744,13 +767,14 @@ describe("runAgentTurn — web_search budget + dedup", () => {
         return [{ title: q, url: `https://e.com/${calls}`, snippet: "s" }];
       },
     });
-    const searchTurns = Array.from({ length: 6 }, (_, i) => [
+    // Twelve distinct searches: over the base cap (8) but within deep-research's (16).
+    const searchTurns = Array.from({ length: 12 }, (_, i) => [
       { type: "tool_call_request", id: `w${i}`, name: "web_search", args: { query: `distinct query ${i}` } } as LLMEvent,
       { type: "done", stopReason: "tool_use" } as LLMEvent,
     ]);
     const llm = makeTurnScriptedLLM([...searchTurns, [{ type: "token", text: "done" }, { type: "done", stopReason: "end" }]]);
-    await collect(baseDeps({ llm, web, deepResearch: true, maxIterations: 10 }));
-    expect(calls).toBe(6); // all six fit under the deep-research cap (8)
+    await collect(baseDeps({ llm, web, deepResearch: true, maxIterations: 16 }));
+    expect(calls).toBe(12); // all twelve fit under the deep-research cap (16)
   });
 });
 
