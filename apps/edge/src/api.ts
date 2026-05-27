@@ -16,14 +16,19 @@ export interface Skill {
 }
 
 // Big enough to hold an installed public skill's SKILL.md (capped at
-// MAX_PUBLIC_SKILL_CONTENT = 6000), not just a short hand-written template.
-const MAX_TEMPLATE = 8000;
+// MAX_PUBLIC_SKILL_CONTENT), not just a short hand-written template. The longest
+// skill in the orthogonal.com catalog is ~22k chars; keep headroom above that.
+const MAX_TEMPLATE = 30000;
 const MAX_NAME = 120;
 
 /** Cap on the SKILL.md body we surface for a public catalog skill — they can be large. */
-const MAX_PUBLIC_SKILL_CONTENT = 6000;
+// Bring in the FULL SKILL.md for every catalog skill (longest is ~22k chars), not a
+// truncated head — so installed/used skills carry their complete instructions.
+const MAX_PUBLIC_SKILL_CONTENT = 25000;
 /** KV cache key + TTL for the transformed public skills catalog. */
-const PUBLIC_SKILLS_CACHE_KEY = "public-skills:v1";
+// v2: full SKILL.md content (was truncated at 6000 under v1). Bumping the key
+// invalidates the stale truncated cache without waiting for its TTL.
+const PUBLIC_SKILLS_CACHE_KEY = "public-skills:v2";
 const PUBLIC_SKILLS_TTL_SECONDS = 3600;
 /** Public, no-auth Orthogonal skills catalog (discover mode). */
 const PUBLIC_SKILLS_URL = "https://api.orthogonal.com/api/skills?discover=true";
