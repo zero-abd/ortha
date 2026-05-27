@@ -72,6 +72,32 @@ export async function deleteConversation(id: string): Promise<void> {
   await fetch(`${API}/api/conversations/${encodeURIComponent(id)}`, { method: "DELETE", headers: authHeaders() });
 }
 
+export interface Skill {
+  id: string;
+  name: string;
+  template: string;
+  createdAt: number;
+}
+
+export async function listSkills(): Promise<Skill[]> {
+  const r = await fetch(`${API}/api/workspace/skills`, { headers: authHeaders() });
+  if (!r.ok) return [];
+  return ((await r.json()) as { skills: Skill[] }).skills ?? [];
+}
+
+/** Add a new skill; returns the updated list (or null on validation failure). */
+export async function saveSkill(input: { name: string; template: string }): Promise<Skill[] | null> {
+  const r = await fetch(`${API}/api/workspace/skills`, { method: "POST", headers: authHeaders(), body: JSON.stringify(input) });
+  if (!r.ok) return null;
+  return ((await r.json()) as { skills: Skill[] }).skills ?? [];
+}
+
+export async function deleteSkill(id: string): Promise<Skill[]> {
+  const r = await fetch(`${API}/api/workspace/skills/${encodeURIComponent(id)}`, { method: "DELETE", headers: authHeaders() });
+  if (!r.ok) return [];
+  return ((await r.json()) as { skills: Skill[] }).skills ?? [];
+}
+
 export interface UsageData {
   monthCents: number;
   monthlyCapCents: number;

@@ -7,6 +7,44 @@ import { kvStore } from "./kv.js";
 
 const VALID_PROVIDERS = new Set<KeyProvider>(["orthogonal", "anthropic", "openai", "openrouter", "gemini"]);
 
+/** A saved, parameterized prompt workflow. Workspace-scoped (syncs). */
+export interface Skill {
+  id: string;
+  name: string;
+  template: string;
+  createdAt: number;
+}
+
+const MAX_TEMPLATE = 2000;
+const MAX_NAME = 120;
+
+/** Read the workspace's skills from KV, tolerating a missing/corrupt blob. */
+async function readSkills(env: Env, workspaceId: string): Promise<Skill[]> {
+  const raw = await env.KV.get(`skills:${workspaceId}`);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as Skill[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Validate + normalize an incoming skill payload (name + template). Returns the
+ * trimmed fields on success or an error string. Shared by add (POST) and replace (PUT).
+ */
+export function validateSkillInput(body: unknown): { name: string; template: string } | { error: string } {
+  const b = body as { name?: unknown; template?: unknown } | null;
+  const name = typeof b?.name === "string" ? b.name.trim() : "";
+  const template = typeof b?.template === "string" ? b.template.trim() : "";
+  if (!name) return { error: "name is required" };
+  if (name.length > MAX_NAME) return { error: "name too long" };
+  if (!template) return { error: "template is required" };
+  if (template.length > MAX_TEMPLATE) return { error: `template too long (max ${MAX_TEMPLATE} chars)` };
+  return { name, template };
+}
+
 /** UTC 'YYYY-MM' for the current billing period (matches DurableSpendStore). */
 function currentPeriod(): string {
   const d = new Date();
@@ -21,9 +59,10 @@ function currentPeriod(): string {
  */
 export async function handleApi(request: Request, env: Env, url: URL, session: Session): Promise<Response | null> {
   const keyMatch = url.pathname.match(/^\/api\/workspace\/keys(?:\/([^/]+))?$/);
+  const skillMatch = url.pathname.match(/^\/api\/workspace\/skills(?:\/([^/]+))?$/);
   const isSettings = url.pathname === "/api/settings";
   const isUsage = url.pathname === "/api/workspace/usage";
-  if (!keyMatch && !isSettings && !isUsage) return null;
+  if (!keyMatch && !skillMatch && !isSettings && !isUsage) return null;
 
   // ── BYOK keys — device-local, encrypted at rest, never synced ──
   if (keyMatch) {
@@ -51,6 +90,53 @@ export async function handleApi(request: Request, env: Env, url: URL, session: S
     if (request.method === "DELETE") {
       await vault.revoke(scope, p);
       return json({ ok: true });
+    }
+    return json({ error: "method not allowed" }, 405);
+  }
+
+  // ── Skills — saved parameterized prompts, per workspace (syncs) ──
+  if (skillMatch) {
+    const skillsKey = `skills:${session.workspaceId}`;
+    const id = skillMatch[1];
+
+    if (request.method === "GET" && !id) {
+      return json({ skills: await readSkills(env, session.workspaceId) });
+    }
+    // Replace the whole list with the posted skills.
+    if (request.method === "PUT" && !id) {
+      const body = (await request.json().catch(() => null)) as { skills?: unknown } | null;
+      if (!Array.isArray(body?.skills)) return json({ error: "skills array required" }, 400);
+      const next: Skill[] = [];
+      for (const raw of body.skills) {
+        const v = validateSkillInput(raw);
+        if ("error" in v) return json({ error: v.error }, 400);
+        const r = raw as Partial<Skill>;
+        next.push({
+          id: typeof r.id === "string" && r.id ? r.id : crypto.randomUUID(),
+          name: v.name,
+          template: v.template,
+          createdAt: typeof r.createdAt === "number" ? r.createdAt : Date.now(),
+        });
+      }
+      await env.KV.put(skillsKey, JSON.stringify(next));
+      return json({ skills: next });
+    }
+    // Add a single skill to the list.
+    if (request.method === "POST" && !id) {
+      const v = validateSkillInput(await request.json().catch(() => null));
+      if ("error" in v) return json({ error: v.error }, 400);
+      const list = await readSkills(env, session.workspaceId);
+      const skill: Skill = { id: crypto.randomUUID(), name: v.name, template: v.template, createdAt: Date.now() };
+      const next = [...list, skill];
+      await env.KV.put(skillsKey, JSON.stringify(next));
+      return json({ skills: next });
+    }
+    // Delete a single skill by id.
+    if (request.method === "DELETE" && id) {
+      const list = await readSkills(env, session.workspaceId);
+      const next = list.filter((s) => s.id !== id);
+      await env.KV.put(skillsKey, JSON.stringify(next));
+      return json({ skills: next });
     }
     return json({ error: "method not allowed" }, 405);
   }
