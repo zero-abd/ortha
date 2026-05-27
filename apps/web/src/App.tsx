@@ -15,6 +15,7 @@ import { BatchModal } from "./components/BatchModal.tsx";
 import { collectRow, type RowResult } from "./lib/batch.ts";
 import { type Attachment, buildPromptWithAttachments, isTextFile } from "./lib/attachments.ts";
 import { TraceBlock } from "./components/TraceBlock.tsx";
+import { Sources } from "./components/Sources.tsx";
 import { useTheme } from "./lib/useTheme.ts";
 import { runTurn } from "./transport.ts";
 import { fetchHistory } from "./live.ts";
@@ -24,6 +25,7 @@ import { API } from "./lib/config.ts";
 import { deleteConversation, getSettings, listConversations, putSettings, renameConversation, type ApiSettings, type Conversation } from "./lib/api.ts";
 import { PROVIDERS, defaultModelOf, providerOfModel } from "./lib/providers.ts";
 import { runCommand, type Command, type CommandContext } from "./lib/commands.ts";
+import { wrapResearch } from "./lib/research.ts";
 import type { AgentRun, ChatMessage, CostState, RawArtifact, TraceStep } from "./types.ts";
 import { AgentsPanel } from "./components/AgentsPanel.tsx";
 import { applyTraceEventToRun, finishRun, newAgentRun } from "./lib/agentRuns.ts";
@@ -72,6 +74,9 @@ export function App() {
   // Text-document attachments for the next message. Their contents ride in the
   // prompt (see `send`); the chat bubble stays clean (original text + a chip).
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  // Deep-research mode: when on, the turn gets a research-directive-wrapped
+  // prompt while the chat bubble still shows the user's original text.
+  const [deepResearch, setDeepResearch] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [discoverOpen, setDiscoverOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
@@ -237,9 +242,11 @@ export function App() {
       // Allow sending with attachments even when the text is blank.
       if ((!text.trim() && attachments.length === 0) || running) return;
       const files = attachments;
-      // The bubble shows the user's ORIGINAL text + a 📎 chip; the model gets
-      // the file contents prepended (buildPromptWithAttachments).
-      const turnText = buildPromptWithAttachments(text, files);
+      // The bubble shows the user's ORIGINAL text (+ a 📎 chip for files). The model
+      // gets the file contents prepended, then wrapped with the research directive
+      // when deep-research mode is on.
+      let turnText = files.length > 0 ? buildPromptWithAttachments(text, files) : text;
+      if (deepResearch) turnText = wrapResearch(turnText);
       setDraft("");
       setAttachments([]);
       stepApi.current = {};
@@ -280,7 +287,7 @@ export function App() {
         refreshConversations();
       }
     },
-    [running, attachments, onEvent, requestPermission, cost.sessionCents, cost.capCents, activeId, refreshConversations, patchActive, startAgentRun, pushAgentEvent, finishAgentRun],
+    [running, attachments, deepResearch, onEvent, requestPermission, cost.sessionCents, cost.capCents, activeId, refreshConversations, patchActive, startAgentRun, pushAgentEvent, finishAgentRun],
   );
 
   // Run one batch row as an isolated turn: a fresh conversation id (so rows run
@@ -597,7 +604,7 @@ export function App() {
               <h1 className="welcome__title">Welcome to Ortha</h1>
               <p className="welcome__sub">Describe what you need — Ortha discovers the right tools and runs them.</p>
               <div style={{ width: "100%", maxWidth: 720 }}>
-                <AskBox value={draft} onChange={setDraft} onSend={() => send(draft)} onCommand={onCommand} disabled={running} attachments={attachments} onAttachmentsChange={setAttachments} autoFocus />
+                <AskBox value={draft} onChange={setDraft} onSend={() => send(draft)} onCommand={onCommand} disabled={running} attachments={attachments} onAttachmentsChange={setAttachments} deepResearch={deepResearch} onToggleDeepResearch={() => setDeepResearch((v) => !v)} autoFocus />
               </div>
               <div className="cats">
                 {EXAMPLE_CATS.map((c) => (
@@ -623,7 +630,7 @@ export function App() {
               </div>
             </div>
             <div className="composer">
-              <AskBox value={draft} onChange={setDraft} onSend={() => send(draft)} onCommand={onCommand} disabled={running} attachments={attachments} onAttachmentsChange={setAttachments} />
+              <AskBox value={draft} onChange={setDraft} onSend={() => send(draft)} onCommand={onCommand} disabled={running} attachments={attachments} onAttachmentsChange={setAttachments} deepResearch={deepResearch} onToggleDeepResearch={() => setDeepResearch((v) => !v)} />
             </div>
           </div>
         )}
@@ -716,6 +723,7 @@ function Message({ m, onOpenRaw, rawStore, pending, resolvedPerms, onDecide, cap
           <ApprovalChip stepId={pending.event.stepId} estCents={pending.event.estCents} sessionCents={pending.event.sessionCents} capCents={pending.event.capCents} dynamic={pending.event.dynamic} onDecide={onDecide} />
         )}
         {m.content && <div className="md">{m.content}</div>}
+        <Sources steps={m.steps} />
         {m.streaming && !m.content && m.steps.length === 0 && (
           <div className="thinking">
             <Spinner size={16} />
@@ -744,6 +752,8 @@ function AskBox({
   disabled,
   attachments,
   onAttachmentsChange,
+  deepResearch,
+  onToggleDeepResearch,
   autoFocus,
 }: {
   value: string;
@@ -753,6 +763,8 @@ function AskBox({
   disabled: boolean;
   attachments?: Attachment[];
   onAttachmentsChange?: (files: Attachment[]) => void;
+  deepResearch?: boolean;
+  onToggleDeepResearch?: () => void;
   autoFocus?: boolean;
 }) {
   // The slash menu is shown when the draft starts with "/" and isn't yet a
@@ -904,6 +916,21 @@ function AskBox({
             }
           }}
         />
+        {onToggleDeepResearch && (
+          <button
+            type="button"
+            className={`research-toggle${deepResearch ? " research-toggle--on" : ""}`}
+            onClick={onToggleDeepResearch}
+            aria-pressed={!!deepResearch}
+            title={deepResearch ? "Deep research is on — Ortha will research across multiple sources" : "Deep research off"}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="11" cy="11" r="7" />
+              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+            <span>Deep research</span>
+          </button>
+        )}
         <button className="ask__send" onClick={onSend} disabled={disabled} aria-label="Send">↑</button>
       </div>
     </div>
