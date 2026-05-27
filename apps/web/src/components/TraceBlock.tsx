@@ -2,6 +2,7 @@ import { useState } from "react";
 import { dollars, ms } from "../lib/format.ts";
 import type { TraceStep } from "../types.ts";
 import { Spinner } from "./Logo.tsx";
+import { ResultCard } from "./ResultCard.tsx";
 
 const ICON: Record<TraceStep["status"], string> = {
   searching: "⊚", // ⊚
@@ -14,13 +15,21 @@ const ICON: Record<TraceStep["status"], string> = {
 interface Props {
   step: TraceStep;
   onOpenRaw: (requestId: string) => void;
+  /** The step's raw result payload (from the rawStore), if available. */
+  raw?: unknown;
+}
+
+/** A raw value worth rendering as a card — anything but null/undefined. */
+function hasStructuredRaw(raw: unknown): boolean {
+  return raw !== null && raw !== undefined;
 }
 
 /** The signature inline agent-trace block: collapsed mono line, expandable detail. */
-export function TraceBlock({ step, onOpenRaw }: Props) {
+export function TraceBlock({ step, onOpenRaw, raw }: Props) {
   const [open, setOpen] = useState(false);
   const running = step.status === "running" || step.status === "searching";
   const label = step.api ? `${step.api} · ${step.path ?? ""}` : "searching tools…";
+  const showCard = step.status === "success" && hasStructuredRaw(raw);
 
   return (
     <div className="trace">
@@ -42,6 +51,7 @@ export function TraceBlock({ step, onOpenRaw }: Props) {
       {open && (
         <div className="trace__detail">
           {step.summary && <div className="trace__result-row">{step.summary}</div>}
+          {showCard && <ResultCard raw={raw} title={step.api ?? step.path} />}
           {step.requestId && step.status === "success" && (
             <button className="linkbtn" onClick={() => onOpenRaw(step.requestId!)}>
               Open raw ↗
