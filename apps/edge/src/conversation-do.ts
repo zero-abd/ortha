@@ -11,6 +11,13 @@ import { applySchema, createStore, d1Adapter, DEFAULT_SETTINGS, type SqlDb } fro
 import type { ConversationStore } from "@ortha/contracts";
 import { doSqlAdapter } from "./do-sql.js";
 import type { Env } from "./env.js";
+import {
+  EMPTY_INPUT_MESSAGE,
+  getSystemPromptText,
+  isBlankInput,
+  isSystemPromptEcho,
+  SYSTEM_PROMPT_REFUSAL,
+} from "./guards.js";
 import { buildLivePorts } from "./ports.js";
 import { createSqlRawStore, RAW_BLOBS_DDL } from "./raw-store.js";
 import { DurableSpendStore, SESSION_SPEND_DDL, WORKSPACE_SPEND_DDL } from "./spend-store.js";
@@ -140,6 +147,13 @@ export class ConversationDO implements DurableObject {
       return;
     }
     const images = sanitizeImages(msg.images);
+    // Empty/whitespace-only input guard: reject cleanly before starting a turn so we
+    // never burn an iteration (or any spend) on "". Images are valid input on their
+    // own, so a blank-text message that carries images still proceeds.
+    if (isBlankInput(msg.text, images.length)) {
+      ws.send(JSON.stringify({ type: "error", code: "BAD_REQUEST", message: EMPTY_INPUT_MESSAGE }));
+      return;
+    }
     this.running = true;
     try {
       await this.runTurn(ws, msg.text, images);
@@ -281,10 +295,19 @@ export class ConversationDO implements DurableObject {
       // expand_result reachable: a later turn reloads the requestId-bearing tool
       // messages. The user message was already persisted above.
       onMessage: async (m) => {
+        // Mirror the streamed echo guard into the persisted transcript: if a final
+        // assistant answer is a verbatim system-prompt dump, store the refusal instead
+        // of the leak, so a later history reload can't re-serve it. Only plain
+        // assistant text (no tool calls) is rewritten — a tool-call turn is plumbing
+        // the model needs intact for cross-turn expand_result.
+        const content =
+          m.role === "assistant" && !m.toolCalls && isSystemPromptEcho(m.content, getSystemPromptText())
+            ? SYSTEM_PROMPT_REFUSAL
+            : m.content;
         await this.store.appendMessage({
           conversationId: this.conversationId,
           role: m.role,
-          content: m.content,
+          content,
           ...(m.toolCalls ? { toolCalls: m.toolCalls } : {}),
           ...(m.toolCallId ? { toolCallId: m.toolCallId } : {}),
           ...(m.toolName ? { toolName: m.toolName } : {}),
@@ -292,11 +315,45 @@ export class ConversationDO implements DurableObject {
       },
     };
 
+    // Verbatim system-prompt echo guard (defense-in-depth vs. prompt-injection leaks).
+    // The loop streams the answer as a run of `token` events terminated by a non-token
+    // event (a tool call, or `done`). We can't un-send a token once it's on the wire, so
+    // to be able to REPLACE a leaked answer we buffer each contiguous text run and only
+    // flush it once we've checked it against the system prompt. Tradeoff: the answer
+    // arrives in run-sized chunks (still well before the turn ends — typically the whole
+    // answer in one chunk) rather than token-by-token live; tool-trace events are
+    // unbuffered, so the live "thinking" trace is unaffected. See guards.ts for the
+    // (high) threshold and why legitimate summarize/translate answers never trip it.
+    const systemPrompt = getSystemPromptText();
+    let pendingTokens: string[] = [];
+    let pendingText = "";
+    const flushTextRun = (): void => {
+      if (pendingTokens.length === 0) return;
+      if (isSystemPromptEcho(pendingText, systemPrompt)) {
+        ws.send(JSON.stringify({ type: "token", text: SYSTEM_PROMPT_REFUSAL }));
+      } else {
+        for (const text of pendingTokens) ws.send(JSON.stringify({ type: "token", text }));
+      }
+      pendingTokens = [];
+      pendingText = "";
+    };
     try {
       for await (const event of runAgentTurn(deps, { messages })) {
+        if (event.type === "token") {
+          pendingTokens.push(event.text);
+          pendingText += event.text;
+          continue;
+        }
+        // Any non-token event closes the current text run: check + flush it before
+        // relaying the boundary event so ordering on the wire is preserved.
+        flushTextRun();
         ws.send(JSON.stringify(event));
       }
+      // The loop always ends with a `done` event (which flushed above); this covers the
+      // defensive case of a stream that ends on a trailing token run with no terminator.
+      flushTextRun();
     } catch (e) {
+      flushTextRun();
       ws.send(JSON.stringify({ type: "error", code: "PROVIDER_DOWN", message: e instanceof Error ? e.message : "loop error" }));
     }
   }
