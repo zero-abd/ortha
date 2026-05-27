@@ -49,6 +49,7 @@ export function SettingsModal({ open, onClose, onSaved, user, onSignOut }: Props
   const [usage, setUsage] = useState<UsageData | null>(null);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [keyError, setKeyError] = useState("");
 
   useEffect(() => {
     if (!open) return;
@@ -74,16 +75,31 @@ export function SettingsModal({ open, onClose, onSaved, user, onSignOut }: Props
     const v = drafts[provider]?.trim();
     if (!v) return;
     setBusy(true);
-    await putKey(provider, v);
-    setDrafts((d) => ({ ...d, [provider]: "" }));
-    setKeys(await listKeys());
-    setBusy(false);
+    setKeyError("");
+    try {
+      await putKey(provider, v);
+      // Optimistically reflect the save so the "· set" badge appears immediately
+      // (and a real failure throws above, so we never show a false positive).
+      const hint = v.length > 4 ? v.slice(-4) : "";
+      setKeys((prev) => [...prev.filter((k) => k.provider !== provider), { provider, status: "active", hint, version: 1 }]);
+      setDrafts((d) => ({ ...d, [provider]: "" }));
+    } catch (e) {
+      setKeyError(e instanceof Error ? e.message : "Couldn't save the key. Try again.");
+    } finally {
+      setBusy(false);
+    }
   };
   const removeKey = async (provider: string) => {
     setBusy(true);
-    await deleteKey(provider);
-    setKeys(await listKeys());
-    setBusy(false);
+    setKeyError("");
+    try {
+      await deleteKey(provider);
+      setKeys((prev) => prev.filter((k) => k.provider !== provider));
+    } catch {
+      setKeyError("Couldn't remove the key. Try again.");
+    } finally {
+      setBusy(false);
+    }
   };
   const saveSettings = async () => {
     setBusy(true);
@@ -142,6 +158,7 @@ export function SettingsModal({ open, onClose, onSaved, user, onSignOut }: Props
                     </div>
                   );
                 })}
+                {keyError && <span className="skill__error">{keyError}</span>}
               </div>
             )}
 

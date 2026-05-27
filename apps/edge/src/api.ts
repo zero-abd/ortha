@@ -73,7 +73,16 @@ export async function handleApi(request: Request, env: Env, url: URL, session: S
     const provider = keyMatch[1];
 
     if (request.method === "GET" && !provider) {
-      return json({ keys: await vault.listKeys(scope) });
+      // Build the list with per-provider get() (strongly consistent in the
+      // caller's colo) rather than vault.listKeys() which scans KV.list — that
+      // index is eventually consistent and can omit a just-saved key for up to a
+      // minute, making the UI claim a key "didn't save" when it actually did.
+      const metas: { provider: KeyProvider; version: number; status: "active"; hint: string }[] = [];
+      for (const prov of VALID_PROVIDERS) {
+        const plaintext = await vault.getKey(scope, prov);
+        if (plaintext) metas.push({ provider: prov, version: 1, status: "active", hint: plaintext.length > 4 ? plaintext.slice(-4) : "" });
+      }
+      return json({ keys: metas });
     }
     if (!provider || !VALID_PROVIDERS.has(provider as KeyProvider)) {
       return json({ error: "unknown provider" }, 400);
