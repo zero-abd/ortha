@@ -83,6 +83,17 @@ export class ConversationDO implements DurableObject {
         await this.clearStoredData().catch(() => {});
         return Response.json({ ok: true });
       }
+      // "Open raw" panel: GET .../raw/:requestId returns the full out-of-context tool
+      // payload this conversation stored (the same blob `expand_result` reads). Auth
+      // already happened in the Worker, which forwards only after validating the session.
+      const rawMatch = url.pathname.match(/\/raw\/([^/]+)$/);
+      if (request.method === "GET" && rawMatch) {
+        await this.init();
+        const requestId = decodeURIComponent(rawMatch[1]!);
+        const data = await createSqlRawStore(this.db).get(requestId);
+        if (data === null || data === undefined) return Response.json({ error: "not_found" }, { status: 404 });
+        return Response.json({ requestId, raw: data });
+      }
       return Response.json({ ok: true, durableObject: "ConversationDO", id: this.ctx.id.toString() });
     }
     const pair = new WebSocketPair();

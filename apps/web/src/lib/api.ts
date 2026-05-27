@@ -76,6 +76,21 @@ export async function deleteConversation(id: string): Promise<void> {
   await fetch(`${API}/api/conversations/${encodeURIComponent(id)}`, { method: "DELETE", headers: authHeaders() });
 }
 
+/**
+ * Fetch the full raw payload of a tool call (the "Open raw" panel). The inline trace
+ * only carries a distilled summary; the complete result is stored out-of-context in the
+ * conversation's DO. Returns null when unavailable (old turn, evicted blob, error).
+ */
+export async function fetchRawResult(conversationId: string, requestId: string): Promise<unknown> {
+  try {
+    const r = await fetch(`${API}/api/conversations/${encodeURIComponent(conversationId)}/raw/${encodeURIComponent(requestId)}`, { headers: authHeaders() });
+    if (!r.ok) return null;
+    return ((await r.json()) as { raw?: unknown }).raw ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export interface Skill {
   id: string;
   name: string;

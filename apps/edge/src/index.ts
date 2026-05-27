@@ -46,6 +46,18 @@ export default {
     const session = await resolveSession(request, env);
     if (!session) return json({ error: "unauthorized" }, 401);
 
+    // Full raw tool-result payload for the "Open raw" panel. Authed here, then read
+    // from the conversation's DO (which holds the out-of-context raw blobs). Re-wrapped
+    // through json() so the cross-origin SPA gets CORS headers.
+    const rawMatch = url.pathname.match(/^\/api\/conversations\/([^/]+)\/raw\/([^/]+)$/);
+    if (rawMatch && request.method === "GET") {
+      const id = decodeURIComponent(rawMatch[1]!);
+      const stub = env.CONVERSATION_DO.get(env.CONVERSATION_DO.idFromName(id));
+      const res = await stub.fetch(request);
+      const body = await res.json().catch(() => ({ error: "bad_raw" }));
+      return json(body, res.status);
+    }
+
     // BYOK keys + settings + usage.
     const api = await handleApi(request, env, url, session);
     if (api) return api;

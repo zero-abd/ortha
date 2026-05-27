@@ -8,6 +8,22 @@ export interface LiveDeps extends TurnDeps {
 }
 
 /**
+ * The inline result card renders the distilled summary. Parse JSON summaries into their
+ * fields so the card shows structured data (e.g. {success, textId}) instead of a raw
+ * string — and never the price: that's already shown as dollars in the trace line, and
+ * the cents value (e.g. 2.5) next to "$0.03" only read as a contradiction.
+ */
+function structuredSummary(summary: string): unknown {
+  try {
+    const parsed: unknown = JSON.parse(summary);
+    if (parsed && typeof parsed === "object") return parsed;
+  } catch {
+    /* not JSON — fall through to a plain text record */
+  }
+  return { summary };
+}
+
+/**
  * Real transport: streams a turn from the deployed Conversation DO over WebSocket.
  * Mirrors the mock's deps so App is transport-agnostic. Rejects fast on connection
  * failure so the caller can fall back to the mock.
@@ -44,7 +60,7 @@ export function runLiveTurn(text: string, deps: LiveDeps, apiBase: string, image
         void deps.requestPermission(ev).then((resp: PermissionResponse) => ws.send(JSON.stringify({ type: "permission", response: resp })));
         return;
       }
-      if (ev.type === "tool_result" && ev.requestId) deps.rawStore.set(ev.requestId, { summary: ev.summary, priceCents: ev.priceCents });
+      if (ev.type === "tool_result" && ev.requestId) deps.rawStore.set(ev.requestId, structuredSummary(ev.summary));
       deps.onEvent(ev);
       if (ev.type === "done") {
         try { ws.close(); } catch { /* noop */ }
