@@ -13,6 +13,7 @@ import { RightPanel } from "./components/RightPanel.tsx";
 import { SettingsModal } from "./components/SettingsModal.tsx";
 import { SideEffectModal } from "./components/SideEffectModal.tsx";
 import { SkillsModal } from "./components/SkillsModal.tsx";
+import { ConnectorsModal } from "./components/ConnectorsModal.tsx";
 import { BatchModal } from "./components/BatchModal.tsx";
 import { collectRow, type RowResult } from "./lib/batch.ts";
 import { type Attachment, buildPromptWithAttachments, isTextFile } from "./lib/attachments.ts";
@@ -25,7 +26,7 @@ import { AuthScreen } from "./components/AuthScreen.tsx";
 import { loginGoogle, logout, me, type AuthUser } from "./lib/auth.ts";
 import { API } from "./lib/config.ts";
 import { deleteConversation, getSettings, listConversations, putSettings, renameConversation, type ApiSettings, type Conversation } from "./lib/api.ts";
-import { PROVIDERS, defaultModelOf, providerOfModel } from "./lib/providers.ts";
+import { modelInfo, modelsForProvider, PROVIDERS, defaultModelOf, providerOfModel } from "./lib/providers.ts";
 import { runCommand, type Command, type CommandContext } from "./lib/commands.ts";
 import { wrapResearch } from "./lib/research.ts";
 import type { AgentRun, ChatMessage, CostState, RawArtifact, TraceStep } from "./types.ts";
@@ -41,14 +42,61 @@ const DEFAULT_SETTINGS: ApiSettings = {
   cacheTtlSeconds: 300,
 };
 
-const EXAMPLE_CATS = [
+// Claude-style first-run greetings; one is picked at random per load.
+const GREETINGS = [
+  "Coffee and Ortha time?",
+  "What are we building today?",
+  "Ready when you are.",
+  "Let's find something.",
+  "Back at it?",
+  "What can I dig up for you?",
+];
+
+// Expandable example categories: clicking a chip reveals that category's prompts.
+const EXAMPLE_CATS: { label: string; items: string[] }[] = [
   {
-    label: "Recruiting",
-    items: ["Find staff engineers in NYC with Rust experience", "Pull LinkedIn profiles for staff engineers at OpenAI"],
+    label: "Go-to-market",
+    items: [
+      "Find VPs of Sales at Stripe and get their verified emails",
+      "Enrich stripe.com with funding, team size, and tech stack",
+      "List companies that recently raised a Series A in fintech",
+      "Find recent job openings at Stripe",
+      "Find decision makers at companies hiring Rust engineers",
+      "Send an outbound email from an AgentMail inbox to jane@stripe.com",
+    ],
   },
   {
-    label: "Enrichment & research",
-    items: ["Who's the CEO of Stripe, and any recent news?", "Find the work email for a founder at Vercel"],
+    label: "Investors",
+    items: [
+      "List AI infra startups that raised a Series A in 2026",
+      "Get funding rounds for openai.com",
+      "Show recent investments into YC W26 companies",
+      "Get founder backgrounds for the team at openai.com",
+      "Find companies similar to Anthropic by employee growth",
+      'Pull news tagged "investment" for openai.com',
+    ],
+  },
+  {
+    label: "Marketing",
+    items: [
+      "Find skincare creators on Instagram with 50k to 500k followers",
+      "Pull the Instagram profile for @glossier",
+      "Scrape stripe.com and return clean markdown",
+      "Search the web for skincare trends in 2026",
+      "Generate a knowledge card on skincare market growth in 2026",
+      "Find the top skincare creators on TikTok",
+    ],
+  },
+  {
+    label: "Recruiting",
+    items: [
+      "Find staff engineers in NYC with Rust experience",
+      "Pull LinkedIn profiles for staff engineers at OpenAI",
+      "Find companies similar to Anthropic for sourcing",
+      "Find Jane Doe's email at Stripe",
+      'Search LinkedIn posts about "rust hiring"',
+      "Send a recruiting outreach to jane@example.com",
+    ],
   },
 ];
 
@@ -71,6 +119,8 @@ export function App() {
   const [panel, setPanel] = useState<RawArtifact | null>(null);
   const [settings, setSettings] = useState<ApiSettings>(DEFAULT_SETTINGS);
   const model = settings.model;
+  // Rotating first-run greeting: pick once per page load.
+  const [greeting] = useState(() => GREETINGS[Math.floor(Math.random() * GREETINGS.length)]!);
   const [running, setRunning] = useState(false);
   const [draft, setDraft] = useState("");
   // Data URLs for images attached to the next message (vision input).
@@ -81,7 +131,10 @@ export function App() {
   // Deep-research mode: when on, the turn gets a research-directive-wrapped
   // prompt while the chat bubble still shows the user's original text.
   const [deepResearch, setDeepResearch] = useState(false);
+  // Web search: on by default. Sent per turn so the agent can ground answers.
+  const [webSearch, setWebSearch] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [connectorsOpen, setConnectorsOpen] = useState(false);
   const [discoverOpen, setDiscoverOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [batchOpen, setBatchOpen] = useState(false);
@@ -150,6 +203,15 @@ export function App() {
     const nextModel = defaultModelOf(providerId);
     setSettings((prev) => {
       const next = { ...prev, model: nextModel };
+      void putSettings(next).catch(() => {});
+      return next;
+    });
+  }, []);
+
+  // Persist a specific model id (from the in-composer model picker).
+  const changeModel = useCallback((modelId: string) => {
+    setSettings((prev) => {
+      const next = { ...prev, model: modelId };
       void putSettings(next).catch(() => {});
       return next;
     });
@@ -285,7 +347,7 @@ export function App() {
           startCents: cost.sessionCents,
           capCents: cost.capCents,
           conversationId: activeId,
-        }, images, deepResearch);
+        }, images, deepResearch, webSearch);
         finishAgentRun(runId);
       } catch (err) {
         const message = err instanceof Error ? err.message : "Couldn't reach Ortha. Check your connection and try again.";
@@ -296,7 +358,7 @@ export function App() {
         refreshConversations();
       }
     },
-    [running, attached, attachments, deepResearch, onEvent, requestPermission, cost.sessionCents, cost.capCents, activeId, refreshConversations, patchActive, startAgentRun, pushAgentEvent, finishAgentRun],
+    [running, attached, attachments, deepResearch, webSearch, onEvent, requestPermission, cost.sessionCents, cost.capCents, activeId, refreshConversations, patchActive, startAgentRun, pushAgentEvent, finishAgentRun],
   );
 
   // Run one batch row as an isolated turn: a fresh conversation id (so rows run
@@ -583,12 +645,15 @@ export function App() {
           </button>
           <span className="main__spacer" />
           {!empty && <CostMeter sessionCents={cost.sessionCents} capCents={cost.capCents} breakdown={breakdown} />}
-          <Dropdown
-            value={providerOfModel(model)}
-            options={PROVIDERS.map((p) => ({ value: p.id, label: p.label }))}
-            onChange={changeProvider}
-            ariaLabel="Provider"
-          />
+          <span className="default-picker">
+            <span className="default-picker__label">Default</span>
+            <Dropdown
+              value={providerOfModel(model)}
+              options={PROVIDERS.map((p) => ({ value: p.id, label: p.label }))}
+              onChange={changeProvider}
+              ariaLabel="Default provider"
+            />
+          </span>
           <button className="iconbtn" onClick={toggle} aria-label="Toggle theme">{applied === "dark" ? "☀" : "☾"}</button>
           <button
             className="iconbtn agents-toggle"
@@ -610,23 +675,33 @@ export function App() {
         {empty ? (
           <div className="stream-wrap">
             <div className="welcome">
-              <h1 className="welcome__title">Welcome to Ortha</h1>
-              <p className="welcome__sub">Describe what you need — Ortha discovers the right tools and runs them.</p>
+              <h1 className="welcome__title">
+                <span className="welcome__mark"><Logo size={30} /></span>
+                {greeting}
+              </h1>
               <div style={{ width: "100%", maxWidth: 720 }}>
-                <AskBox value={draft} onChange={setDraft} onSend={() => send(draft)} onCommand={onCommand} disabled={running} attached={attached} onAttach={setAttached} attachments={attachments} onAttachmentsChange={setAttachments} deepResearch={deepResearch} onToggleDeepResearch={() => setDeepResearch((v) => !v)} autoFocus />
+                <AskBox
+                  value={draft}
+                  onChange={setDraft}
+                  onSend={() => send(draft)}
+                  onCommand={onCommand}
+                  disabled={running}
+                  attached={attached}
+                  onAttach={setAttached}
+                  attachments={attachments}
+                  onAttachmentsChange={setAttachments}
+                  deepResearch={deepResearch}
+                  onToggleDeepResearch={() => setDeepResearch((v) => !v)}
+                  webSearch={webSearch}
+                  onToggleWebSearch={() => setWebSearch((v) => !v)}
+                  openSkills={() => setSkillsOpen(true)}
+                  openConnectors={() => setConnectorsOpen(true)}
+                  model={model}
+                  onModelChange={changeModel}
+                  autoFocus
+                />
               </div>
-              <div className="cats">
-                {EXAMPLE_CATS.map((c) => (
-                  <div key={c.label} style={{ marginBottom: 18 }}>
-                    <div className="cat__label">{c.label}</div>
-                    <div className="cat__grid">
-                      {c.items.map((ex) => (
-                        <button key={ex} className="examplecard" onClick={() => send(ex)}>{ex}</button>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <ExampleChips onPick={(p) => void send(p)} />
             </div>
           </div>
         ) : (
@@ -639,7 +714,25 @@ export function App() {
               </div>
             </div>
             <div className="composer">
-              <AskBox value={draft} onChange={setDraft} onSend={() => send(draft)} onCommand={onCommand} disabled={running} attached={attached} onAttach={setAttached} attachments={attachments} onAttachmentsChange={setAttachments} deepResearch={deepResearch} onToggleDeepResearch={() => setDeepResearch((v) => !v)} />
+              <AskBox
+                value={draft}
+                onChange={setDraft}
+                onSend={() => send(draft)}
+                onCommand={onCommand}
+                disabled={running}
+                attached={attached}
+                onAttach={setAttached}
+                attachments={attachments}
+                onAttachmentsChange={setAttachments}
+                deepResearch={deepResearch}
+                onToggleDeepResearch={() => setDeepResearch((v) => !v)}
+                webSearch={webSearch}
+                onToggleWebSearch={() => setWebSearch((v) => !v)}
+                openSkills={() => setSkillsOpen(true)}
+                openConnectors={() => setConnectorsOpen(true)}
+                model={model}
+                onModelChange={changeModel}
+              />
             </div>
           </div>
         )}
@@ -673,6 +766,7 @@ export function App() {
       <DiscoverModal open={discoverOpen} onClose={() => setDiscoverOpen(false)} />
 
       <SkillsModal open={skillsOpen} onClose={() => setSkillsOpen(false)} onRun={(prompt) => void send(prompt)} />
+      <ConnectorsModal open={connectorsOpen} onClose={() => setConnectorsOpen(false)} />
       <BatchModal open={batchOpen} onClose={() => setBatchOpen(false)} runRow={runBatchRow} />
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} ctx={commandCtx} />
       <AgentsPanel
@@ -759,6 +853,44 @@ function Message({ m, onOpenRaw, rawStore, pending, resolvedPerms, onDecide, cap
   );
 }
 
+// Claude-style category chips: a row of chips; clicking one expands a panel of
+// that category's example prompts. Only one panel is open at a time; an X closes it.
+function ExampleChips({ onPick }: { onPick: (prompt: string) => void }) {
+  const [openLabel, setOpenLabel] = useState<string | null>(null);
+  const active = EXAMPLE_CATS.find((c) => c.label === openLabel) ?? null;
+
+  return (
+    <div className="cats">
+      <div className="cats__row" role="group" aria-label="Example categories">
+        {EXAMPLE_CATS.map((c) => (
+          <button
+            key={c.label}
+            type="button"
+            className={`cat-chip${openLabel === c.label ? " cat-chip--active" : ""}`}
+            aria-expanded={openLabel === c.label}
+            onClick={() => setOpenLabel((cur) => (cur === c.label ? null : c.label))}
+          >
+            {c.label}
+          </button>
+        ))}
+      </div>
+      {active && (
+        <div className="cat-panel" role="region" aria-label={`${active.label} examples`}>
+          <div className="cat-panel__head">
+            <span className="cat-panel__title">{active.label}</span>
+            <button className="iconbtn iconbtn--sm" aria-label="Close examples" onClick={() => setOpenLabel(null)}>✕</button>
+          </div>
+          <div className="cat-panel__list">
+            {active.items.map((ex) => (
+              <button key={ex} type="button" className="examplecard" onClick={() => onPick(ex)}>{ex}</button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Vision attach limits (mirror the server-side gate in conversation-do.ts).
 const MAX_IMAGES = 2;
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
@@ -775,6 +907,10 @@ function readImageDataUrl(file: File): Promise<string> {
 // Each attached file is capped at ~200KB read client-side.
 const MAX_ATTACH_BYTES = 200 * 1024;
 
+// Combined picker accept list: images + the existing text-document types.
+const FILE_ACCEPT =
+  "image/*,text/*,.txt,.text,.md,.markdown,.rst,.log,.csv,.tsv,.json,.jsonl,.ndjson,.yaml,.yml,.toml,.ini,.env,.xml,.html,.htm,.css,.scss,.svg,.ts,.tsx,.js,.jsx,.mjs,.cjs,.py,.rb,.go,.rs,.java,.kt,.c,.h,.cc,.cpp,.hpp,.cs,.php,.swift,.sh,.bash,.zsh,.sql,.graphql,.gql,.vue,.svelte";
+
 function AskBox({
   value,
   onChange,
@@ -785,6 +921,12 @@ function AskBox({
   onAttachmentsChange,
   deepResearch,
   onToggleDeepResearch,
+  webSearch,
+  onToggleWebSearch,
+  openSkills,
+  openConnectors,
+  model,
+  onModelChange,
   autoFocus,
   attached = [],
   onAttach,
@@ -798,6 +940,12 @@ function AskBox({
   onAttachmentsChange?: (files: Attachment[]) => void;
   deepResearch?: boolean;
   onToggleDeepResearch?: () => void;
+  webSearch?: boolean;
+  onToggleWebSearch?: () => void;
+  openSkills?: () => void;
+  openConnectors?: () => void;
+  model?: string;
+  onModelChange?: (modelId: string) => void;
   autoFocus?: boolean;
   attached?: string[];
   onAttach?: (images: string[]) => void;
@@ -807,7 +955,6 @@ function AskBox({
   // open while the user is still on the command word or just past it.
   const slashOpen = onCommand != null && value.startsWith("/");
   const navRef = useRef<SlashNav | null>(null);
-  const fileRef = useRef<HTMLInputElement | null>(null);
 
   const files = attachments ?? [];
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -823,44 +970,46 @@ function AskBox({
     return false;
   };
 
-  // Read picked image files to data URLs, skipping anything over the size cap, and
-  // append up to MAX_IMAGES total. Resets the input so re-picking the same file works.
-  const onPickFiles = async (files: FileList | null) => {
-    if (!files || !onAttach) return;
-    const room = MAX_IMAGES - attached.length;
-    if (room <= 0) return;
-    const picked: string[] = [];
-    for (const file of Array.from(files).slice(0, room)) {
-      if (!file.type.startsWith("image/") || file.size > MAX_IMAGE_BYTES) continue;
-      try {
-        const url = await readImageDataUrl(file);
-        if (url) picked.push(url);
-      } catch {
-        /* skip unreadable file */
-      }
-    }
-    if (picked.length > 0) onAttach([...attached, ...picked].slice(0, MAX_IMAGES));
-  };
-
-  const removeImage = (idx: number) => onAttach?.(attached.filter((_, i) => i !== idx));
-
-  // Read selected files client-side. Text files (by mime/extension) within the
-  // size cap are kept as {name, content}; anything else shows a friendly notice.
-  const onFilesPicked = (list: FileList | null) => {
-    if (!list || !onAttachmentsChange) return;
+  // One combined picker: images ride as vision input (capped at MAX_IMAGES);
+  // text files are read and kept as {name, content} (prepended to the prompt).
+  // Anything else surfaces a friendly notice. Both behaviors preserved, one entry.
+  const onPickCombined = (list: FileList | null) => {
+    if (!list) return;
     setAttachNotice(null);
     const picked = Array.from(list);
-    const added: Attachment[] = [];
+    let imageRoom = onAttach ? MAX_IMAGES - attached.length : 0;
+    const addedImages: string[] = [];
+    const addedFiles: Attachment[] = [];
     let pending = picked.length;
     const finish = () => {
       pending -= 1;
-      if (pending === 0 && added.length > 0) {
-        onAttachmentsChange([...(attachments ?? []), ...added]);
-      }
+      if (pending > 0) return;
+      if (addedImages.length > 0 && onAttach) onAttach([...attached, ...addedImages].slice(0, MAX_IMAGES));
+      if (addedFiles.length > 0 && onAttachmentsChange) onAttachmentsChange([...(attachments ?? []), ...addedFiles]);
     };
     for (const file of picked) {
-      if (!isTextFile(file.name, file.type)) {
-        setAttachNotice(`"${file.name}" isn't supported — text files only for now.`);
+      if (file.type.startsWith("image/")) {
+        if (!onAttach || imageRoom <= 0) {
+          setAttachNotice(`Up to ${MAX_IMAGES} images per message.`);
+          finish();
+          continue;
+        }
+        if (file.size > MAX_IMAGE_BYTES) {
+          setAttachNotice(`"${file.name}" is too large (max 4MB).`);
+          finish();
+          continue;
+        }
+        imageRoom -= 1;
+        void readImageDataUrl(file)
+          .then((url) => {
+            if (url) addedImages.push(url);
+          })
+          .catch(() => {})
+          .finally(finish);
+        continue;
+      }
+      if (!onAttachmentsChange || !isTextFile(file.name, file.type)) {
+        setAttachNotice(`"${file.name}" isn't supported — images or text files only.`);
         finish();
         continue;
       }
@@ -871,7 +1020,7 @@ function AskBox({
       }
       const reader = new FileReader();
       reader.onload = () => {
-        added.push({ name: file.name, content: typeof reader.result === "string" ? reader.result : "" });
+        addedFiles.push({ name: file.name, content: typeof reader.result === "string" ? reader.result : "" });
         finish();
       };
       reader.onerror = () => {
@@ -882,9 +1031,12 @@ function AskBox({
     }
   };
 
+  const removeImage = (idx: number) => onAttach?.(attached.filter((_, i) => i !== idx));
   const removeAttachment = (name: string) => {
     onAttachmentsChange?.(files.filter((f) => f.name !== name));
   };
+
+  const canAttach = !!onAttach || !!onAttachmentsChange;
 
   return (
     <div className="ask-wrap">
@@ -933,57 +1085,36 @@ function AskBox({
           {attachNotice && <span className="attach-notice">{attachNotice}</span>}
         </div>
       )}
+      {/* Show a notice for the image-only composer (no text-file tray) too. */}
+      {!onAttachmentsChange && attachNotice && (
+        <div className="attach-tray"><span className="attach-notice">{attachNotice}</span></div>
+      )}
       <div className="ask">
-        {onAttach && (
-          <>
-            <input
-              ref={fileRef}
-              type="file"
-              accept="image/*"
-              multiple
-              style={{ display: "none" }}
-              onChange={(e) => {
-                void onPickFiles(e.target.files);
-                e.target.value = "";
-              }}
-            />
-            <button
-              type="button"
-              className="ask__attach iconbtn"
-              aria-label="Attach image"
-              title="Attach image"
-              disabled={disabled || attached.length >= MAX_IMAGES}
-              onClick={() => fileRef.current?.click()}
-            >
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-              </svg>
-            </button>
-          </>
+        {canAttach && (
+          <input
+            ref={fileInputRef}
+            type="file"
+            className="attach-input"
+            multiple
+            accept={FILE_ACCEPT}
+            onChange={(e) => {
+              onPickCombined(e.target.files);
+              e.target.value = "";
+            }}
+          />
         )}
-        {onAttachmentsChange && (
-          <>
-            <input
-              ref={fileInputRef}
-              type="file"
-              className="attach-input"
-              multiple
-              accept="text/*,.txt,.text,.md,.markdown,.rst,.log,.csv,.tsv,.json,.jsonl,.ndjson,.yaml,.yml,.toml,.ini,.env,.xml,.html,.htm,.css,.scss,.svg,.ts,.tsx,.js,.jsx,.mjs,.cjs,.py,.rb,.go,.rs,.java,.kt,.c,.h,.cc,.cpp,.hpp,.cs,.php,.swift,.sh,.bash,.zsh,.sql,.graphql,.gql,.vue,.svelte"
-              onChange={(e) => {
-                onFilesPicked(e.target.files);
-                e.target.value = "";
-              }}
-            />
-            <button
-              type="button"
-              className="ask__attach"
-              aria-label="Attach a text file"
-              title="Attach a text file"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              📎
-            </button>
-          </>
+        {(canAttach || onToggleWebSearch || onToggleDeepResearch || openSkills || openConnectors) && (
+          <ComposerMenu
+            disabled={disabled}
+            canAttach={canAttach}
+            onAddFiles={() => fileInputRef.current?.click()}
+            webSearch={webSearch}
+            onToggleWebSearch={onToggleWebSearch}
+            deepResearch={deepResearch}
+            onToggleDeepResearch={onToggleDeepResearch}
+            openSkills={openSkills}
+            openConnectors={openConnectors}
+          />
         )}
         <textarea
           className="ask__input"
@@ -1017,23 +1148,236 @@ function AskBox({
             }
           }}
         />
-        {onToggleDeepResearch && (
-          <button
-            type="button"
-            className={`research-toggle${deepResearch ? " research-toggle--on" : ""}`}
-            onClick={onToggleDeepResearch}
-            aria-pressed={!!deepResearch}
-            title={deepResearch ? "Deep research is on — Ortha will research across multiple sources" : "Deep research off"}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <circle cx="11" cy="11" r="7" />
-              <line x1="21" y1="21" x2="16.65" y2="16.65" />
-            </svg>
-            <span>Deep research</span>
-          </button>
-        )}
+        {model && onModelChange && <ComposerModelPicker model={model} onChange={onModelChange} />}
         <button className="ask__send" onClick={onSend} disabled={disabled} aria-label="Send">↑</button>
       </div>
+    </div>
+  );
+}
+
+// Claude-style "+" popover: one menu for attachments, web search, deep research,
+// skills, and connectors. Closes on outside-click or Escape.
+function ComposerMenu({
+  disabled,
+  canAttach,
+  onAddFiles,
+  webSearch,
+  onToggleWebSearch,
+  deepResearch,
+  onToggleDeepResearch,
+  openSkills,
+  openConnectors,
+}: {
+  disabled: boolean;
+  canAttach: boolean;
+  onAddFiles: () => void;
+  webSearch?: boolean | undefined;
+  onToggleWebSearch?: (() => void) | undefined;
+  deepResearch?: boolean | undefined;
+  onToggleDeepResearch?: (() => void) | undefined;
+  openSkills?: (() => void) | undefined;
+  openConnectors?: (() => void) | undefined;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const close = () => setOpen(false);
+
+  return (
+    <div className="composer-menu" ref={ref}>
+      <button
+        type="button"
+        className="ask__plus"
+        aria-label="Add files and tools"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title="Add files and tools"
+        onClick={() => setOpen((o) => !o)}
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+          <line x1="12" y1="5" x2="12" y2="19" />
+          <line x1="5" y1="12" x2="19" y2="12" />
+        </svg>
+      </button>
+      {open && (
+        <div className="composer-menu__pop" role="menu">
+          {canAttach && (
+            <button
+              type="button"
+              className="composer-menu__item"
+              role="menuitem"
+              disabled={disabled}
+              onClick={() => {
+                close();
+                onAddFiles();
+              }}
+            >
+              <span className="composer-menu__icon" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                </svg>
+              </span>
+              <span className="composer-menu__label">Add files or photos</span>
+            </button>
+          )}
+          {onToggleWebSearch && (
+            <button
+              type="button"
+              className="composer-menu__item"
+              role="menuitemcheckbox"
+              aria-checked={!!webSearch}
+              onClick={() => onToggleWebSearch()}
+            >
+              <span className="composer-menu__icon" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="9" />
+                  <line x1="3" y1="12" x2="21" y2="12" />
+                  <path d="M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18" />
+                </svg>
+              </span>
+              <span className="composer-menu__label">Web search</span>
+              {webSearch && <span className="composer-menu__check">✓</span>}
+            </button>
+          )}
+          {onToggleDeepResearch && (
+            <button
+              type="button"
+              className="composer-menu__item"
+              role="menuitemcheckbox"
+              aria-checked={!!deepResearch}
+              onClick={() => onToggleDeepResearch()}
+            >
+              <span className="composer-menu__icon" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="11" cy="11" r="7" />
+                  <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                </svg>
+              </span>
+              <span className="composer-menu__label">Deep research</span>
+              {deepResearch && <span className="composer-menu__check">✓</span>}
+            </button>
+          )}
+          {(openSkills || openConnectors) && <div className="composer-menu__sep" />}
+          {openSkills && (
+            <button
+              type="button"
+              className="composer-menu__item"
+              role="menuitem"
+              onClick={() => {
+                close();
+                openSkills();
+              }}
+            >
+              <span className="composer-menu__icon" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                </svg>
+              </span>
+              <span className="composer-menu__label">Skills</span>
+            </button>
+          )}
+          {openConnectors && (
+            <button
+              type="button"
+              className="composer-menu__item"
+              role="menuitem"
+              onClick={() => {
+                close();
+                openConnectors();
+              }}
+            >
+              <span className="composer-menu__icon" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M9 7V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v3" />
+                  <rect x="4" y="7" width="16" height="13" rx="2" />
+                  <line x1="9" y1="13" x2="15" y2="13" />
+                </svg>
+              </span>
+              <span className="composer-menu__label">Connectors</span>
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// In-composer model selector (Claude-style pill): shows the current model's
+// displayName; the menu lists models grouped by provider with the active one ticked.
+function ComposerModelPicker({ model, onChange }: { model: string; onChange: (modelId: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const current = modelInfo(model);
+  // Providers that actually have a model in the catalog, in catalog order.
+  const groups = PROVIDERS.map((p) => ({ provider: p, models: modelsForProvider(p.id) })).filter((g) => g.models.length > 0);
+
+  return (
+    <div className="model-pick" ref={ref}>
+      <button
+        type="button"
+        className="model-pick__trigger"
+        aria-label="Model"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span className="model-pick__name">{current?.displayName ?? model}</span>
+        <span className="caret">▾</span>
+      </button>
+      {open && (
+        <div className="model-pick__pop" role="listbox" aria-label="Model">
+          {groups.map((g) => (
+            <div className="model-pick__group" key={g.provider.id}>
+              <div className="model-pick__grouplabel">{g.provider.label}</div>
+              {g.models.map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  role="option"
+                  aria-selected={m.id === model}
+                  className={`model-pick__opt${m.id === model ? " model-pick__opt--active" : ""}`}
+                  onClick={() => {
+                    onChange(m.id);
+                    setOpen(false);
+                  }}
+                >
+                  <span className="model-pick__opt-label">{m.displayName}</span>
+                  {m.id === model && <span className="model-pick__check">✓</span>}
+                </button>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
