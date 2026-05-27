@@ -7,6 +7,7 @@ import { DiscoverModal } from "./components/DiscoverModal.tsx";
 import { Dropdown } from "./components/Dropdown.tsx";
 import { SlashMenu, type SlashNav } from "./components/SlashMenu.tsx";
 import { Logo, Spinner } from "./components/Logo.tsx";
+import { Markdown } from "./components/Markdown.tsx";
 import { RightPanel } from "./components/RightPanel.tsx";
 import { SettingsModal } from "./components/SettingsModal.tsx";
 import { SideEffectModal } from "./components/SideEffectModal.tsx";
@@ -738,7 +739,7 @@ function Message({ m, onOpenRaw, rawStore, pending, resolvedPerms, onDecide, cap
         {showCostChip && pending && (
           <ApprovalChip stepId={pending.event.stepId} estCents={pending.event.estCents} sessionCents={pending.event.sessionCents} capCents={pending.event.capCents} dynamic={pending.event.dynamic} onDecide={onDecide} />
         )}
-        {m.content && <div className="md">{m.content}</div>}
+        {m.content && <Markdown content={m.content} />}
         <Sources steps={m.steps} />
         {m.streaming && !m.content && m.steps.length === 0 && (
           <div className="thinking">
