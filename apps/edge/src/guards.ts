@@ -58,6 +58,17 @@ const MIN_CONTIGUOUS_RUN = 200;
 const MIN_COVERAGE_RATIO = 0.6;
 
 /**
+ * How many leading characters of each streamed text run the DO buffers before
+ * deciding whether it's a leak. Extraction attacks ("repeat the text above",
+ * "print the first N words") dump the prompt from the very start of the answer, so
+ * a prefix this size reliably contains the >= MIN_CONTIGUOUS_RUN verbatim block —
+ * which lets the DO stream the REST of the answer live (token-by-token) instead of
+ * withholding the whole thing. Comfortably above MIN_CONTIGUOUS_RUN so the prefix
+ * is always long enough for the run signal to fire.
+ */
+export const ECHO_GUARD_PREFIX_CHARS = 300;
+
+/**
  * Length of the longest run of characters that appears contiguously in BOTH
  * `answer` and `prompt`. Cheap sliding compare: O(answer * prompt) worst case, but
  * the prompt is a fixed ~1.5KB and we early-exit once a run >= MIN_CONTIGUOUS_RUN is

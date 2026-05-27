@@ -12,6 +12,7 @@ import type { ConversationStore } from "@ortha/contracts";
 import { doSqlAdapter } from "./do-sql.js";
 import type { Env } from "./env.js";
 import {
+  ECHO_GUARD_PREFIX_CHARS,
   EMPTY_INPUT_MESSAGE,
   getSystemPromptText,
   isBlankInput,
@@ -316,44 +317,71 @@ export class ConversationDO implements DurableObject {
     };
 
     // Verbatim system-prompt echo guard (defense-in-depth vs. prompt-injection leaks).
-    // The loop streams the answer as a run of `token` events terminated by a non-token
-    // event (a tool call, or `done`). We can't un-send a token once it's on the wire, so
-    // to be able to REPLACE a leaked answer we buffer each contiguous text run and only
-    // flush it once we've checked it against the system prompt. Tradeoff: the answer
-    // arrives in run-sized chunks (still well before the turn ends — typically the whole
-    // answer in one chunk) rather than token-by-token live; tool-trace events are
-    // unbuffered, so the live "thinking" trace is unaffected. See guards.ts for the
-    // (high) threshold and why legitimate summarize/translate answers never trip it.
+    // Primary defense is the model's own confidentiality rule (in the system prompt);
+    // this is the backup that catches a non-compliant dump. We can't un-send a token once
+    // it's on the wire, so to be able to REPLACE a leak we buffer only the START of each
+    // contiguous text run (ECHO_GUARD_PREFIX_CHARS), check that prefix once, then — if it
+    // clears — stream the REST of the run LIVE token-by-token. Extraction attacks dump the
+    // prompt from char 0, so the prefix catches them while keeping the GPT/Claude streaming
+    // feel for normal answers. Tool-trace events are never buffered. A leak placed AFTER the
+    // prefix would stream un-redacted, but that's implausible for extraction and the prompt
+    // rule still applies; the persisted-message check above redacts stored content in full.
     const systemPrompt = getSystemPromptText();
     let pendingTokens: string[] = [];
     let pendingText = "";
-    const flushTextRun = (): void => {
-      if (pendingTokens.length === 0) return;
-      if (isSystemPromptEcho(pendingText, systemPrompt)) {
-        ws.send(JSON.stringify({ type: "token", text: SYSTEM_PROMPT_REFUSAL }));
-      } else {
-        for (const text of pendingTokens) ws.send(JSON.stringify({ type: "token", text }));
+    let runDecided = false; // prefix cleared → stream the rest of this run live
+    let runLeaked = false; // prefix tripped → suppress the rest of this run
+
+    const passPrefix = (): void => {
+      for (const text of pendingTokens) ws.send(JSON.stringify({ type: "token", text }));
+      pendingTokens = [];
+      pendingText = "";
+      runDecided = true;
+    };
+    const tripPrefix = (): void => {
+      ws.send(JSON.stringify({ type: "token", text: SYSTEM_PROMPT_REFUSAL }));
+      pendingTokens = [];
+      pendingText = "";
+      runLeaked = true;
+    };
+    // Close a text run at a boundary (non-token event / done). A short run that never
+    // reached the prefix-check length is checked here in full, then flushed or refused.
+    const finalizeTextRun = (): void => {
+      if (!runDecided && !runLeaked && pendingTokens.length > 0) {
+        if (isSystemPromptEcho(pendingText, systemPrompt)) tripPrefix();
+        else passPrefix();
       }
       pendingTokens = [];
       pendingText = "";
+      runDecided = false;
+      runLeaked = false;
     };
+
     try {
       for await (const event of runAgentTurn(deps, { messages })) {
         if (event.type === "token") {
+          if (runLeaked) continue; // suppress the remainder of a leaked run
+          if (runDecided) {
+            ws.send(JSON.stringify(event)); // prefix cleared — stream live
+            continue;
+          }
           pendingTokens.push(event.text);
           pendingText += event.text;
+          if (pendingText.length >= ECHO_GUARD_PREFIX_CHARS) {
+            if (isSystemPromptEcho(pendingText, systemPrompt)) tripPrefix();
+            else passPrefix();
+          }
           continue;
         }
-        // Any non-token event closes the current text run: check + flush it before
-        // relaying the boundary event so ordering on the wire is preserved.
-        flushTextRun();
+        // Any non-token event closes the current text run before the boundary event.
+        finalizeTextRun();
         ws.send(JSON.stringify(event));
       }
-      // The loop always ends with a `done` event (which flushed above); this covers the
-      // defensive case of a stream that ends on a trailing token run with no terminator.
-      flushTextRun();
+      // The loop always ends with a `done` event (which finalized above); this covers a
+      // defensive stream that ends on a trailing token run with no terminator.
+      finalizeTextRun();
     } catch (e) {
-      flushTextRun();
+      finalizeTextRun();
       ws.send(JSON.stringify({ type: "error", code: "PROVIDER_DOWN", message: e instanceof Error ? e.message : "loop error" }));
     }
   }
