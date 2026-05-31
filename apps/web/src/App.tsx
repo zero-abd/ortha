@@ -323,6 +323,9 @@ export function App() {
       setAttached([]);
       setAttachments([]);
       stepApi.current = {};
+      // Each turn starts with a clean slate of resolved-permission chips, so a prior
+      // turn's "Approved a $X step" never carries onto this turn's message.
+      setResolvedPerms({});
       setMessages((prev) => [
         ...prev,
         {
@@ -413,6 +416,9 @@ export function App() {
     setPending(null);
     setPanel(null);
     setCostLive(false);
+    // Clear resolved-permission chips too, so a previous conversation's approval boxes
+    // don't reappear when starting a new chat, clearing, or switching conversations.
+    setResolvedPerms({});
     setCost({ sessionCents: 0, capCents: settings.sessionCapCents, remainingCents: settings.monthlyCapCents });
   };
 
@@ -739,8 +745,8 @@ export function App() {
           <div className="stream-wrap">
             <div className="stream">
               <div className="stream__inner">
-                {messages.map((m) => (
-                  <Message key={m.id} m={m} onOpenRaw={openRaw} rawStore={rawStore.current} pending={pending} resolvedPerms={resolvedPerms} onDecide={(r) => pending?.resolve(r)} cap={cost.capCents} session={cost.sessionCents} />
+                {messages.map((m, i) => (
+                  <Message key={m.id} m={m} isLast={i === messages.length - 1} onOpenRaw={openRaw} rawStore={rawStore.current} pending={pending} resolvedPerms={resolvedPerms} onDecide={(r) => pending?.resolve(r)} cap={cost.capCents} session={cost.sessionCents} />
                 ))}
               </div>
             </div>
@@ -819,6 +825,9 @@ export function App() {
 
 interface MessageProps {
   m: ChatMessage;
+  /** Only the last message renders the live/resolved permission chips, so they never
+   *  duplicate onto earlier turns' messages. */
+  isLast: boolean;
   onOpenRaw: (id: string) => void;
   rawStore: Map<string, unknown>;
   pending: Pending | null;
@@ -828,7 +837,7 @@ interface MessageProps {
   session: number;
 }
 
-function Message({ m, onOpenRaw, rawStore, pending, resolvedPerms, onDecide, cap, session }: MessageProps) {
+function Message({ m, isLast, onOpenRaw, rawStore, pending, resolvedPerms, onDecide, cap, session }: MessageProps) {
   if (m.role === "user") {
     return (
       <div className="msg msg--user">
@@ -877,9 +886,10 @@ function Message({ m, onOpenRaw, rawStore, pending, resolvedPerms, onDecide, cap
         {m.steps.map((s: TraceStep) => (
           <TraceBlock key={s.stepId} step={s} onOpenRaw={onOpenRaw} raw={s.requestId ? rawStore.get(s.requestId) : undefined} />
         ))}
-        {Object.entries(resolvedPerms).map(([stepId, info]) => (
-          <ApprovalChip key={`r_${stepId}`} stepId={stepId} estCents={info.estCents} sessionCents={session} capCents={cap} dynamic={info.dynamic} resolved={info.outcome} onDecide={onDecide} />
-        ))}
+        {isLast &&
+          Object.entries(resolvedPerms).map(([stepId, info]) => (
+            <ApprovalChip key={`r_${stepId}`} stepId={stepId} estCents={info.estCents} sessionCents={session} capCents={cap} dynamic={info.dynamic} resolved={info.outcome} onDecide={onDecide} />
+          ))}
         {showCostChip && pending && (
           <ApprovalChip stepId={pending.event.stepId} estCents={pending.event.estCents} sessionCents={pending.event.sessionCents} capCents={pending.event.capCents} dynamic={pending.event.dynamic} onDecide={onDecide} />
         )}

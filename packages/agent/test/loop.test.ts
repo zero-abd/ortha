@@ -200,9 +200,11 @@ describe("runAgentTurn — permission gate", () => {
     expect(types).toContain("tool_result");
   });
 
-  it("forces a cost gate when pricing is dynamic, even though the budget check passes", async () => {
-    // Default budget is well within cap → "ok". The gate must come from the estimate
-    // being a floor (dynamic pricing), so a "watch it spend" user explicitly approves.
+  it("flags dynamic on the chip when a gate fires from the cap/warn (dynamic alone no longer forces it)", async () => {
+    // Dynamic pricing on its own must NOT gate (a cheap dynamic call shouldn't nag —
+    // the separate regression test below covers that). But when a gate IS triggered by
+    // the per-call warn / session cap, the chip should still flag `dynamic: true` so the
+    // user sees "~$X+ · price varies".
     const orthogonal = makeMockOrthogonalClient({
       async estimateCost(plan) {
         const breakdown = plan.map((s) => ({ api: s.api, path: s.path, cents: 3 * s.expectedCalls, dynamic: true }));
@@ -222,11 +224,44 @@ describe("runAgentTurn — permission gate", () => {
       [{ type: "token", text: "ok" }, { type: "done", stopReason: "end" }],
     ]);
 
-    const events = await collect(baseDeps({ llm, orthogonal, requestPermission }));
+    // gatingBudget() forces checkEstimate -> permission_required (cap/warn path).
+    const events = await collect(baseDeps({ llm, orthogonal, budget: gatingBudget(), requestPermission }));
     expect(requestPermission).toHaveBeenCalledOnce();
     const gate = events.find((e) => e.type === "permission_required");
     expect(gate).toMatchObject({ kind: "cost", dynamic: true });
     // Approval still lets the paid call proceed end-to-end.
+    expect(events.some((e) => e.type === "tool_call_started")).toBe(true);
+    expect(events.some((e) => e.type === "tool_result")).toBe(true);
+  });
+
+  it("does NOT gate a cheap dynamic call when checkEstimate returns ok", async () => {
+    // Regression for the user-reported bug: a 1¢-ish dynamic call was force-gating even
+    // though the per-call warn is 25¢. Dynamic pricing alone no longer triggers a gate —
+    // the cap/warn check (checkEstimate) is the only cost gate path now.
+    const orthogonal = makeMockOrthogonalClient({
+      async estimateCost(plan) {
+        const breakdown = plan.map((s) => ({ api: s.api, path: s.path, cents: 1 * s.expectedCalls, dynamic: true }));
+        return {
+          estimatedCents: breakdown.reduce((a, b) => a + b.cents, 0),
+          breakdown,
+          hasUnknownPrices: false,
+          hasDynamicPricing: true,
+        };
+      },
+    });
+    const requestPermission = vi.fn(
+      async (): Promise<PermissionResponse> => ({ stepId: "x", decision: "approve" }),
+    );
+    const llm = makeTurnScriptedLLM([
+      [RUN_CALL, { type: "done", stopReason: "tool_use" }],
+      [{ type: "token", text: "ok" }, { type: "done", stopReason: "end" }],
+    ]);
+
+    // Default budget passes (checkEstimate -> ok). No gate should fire.
+    const events = await collect(baseDeps({ llm, orthogonal, requestPermission }));
+    expect(requestPermission).not.toHaveBeenCalled();
+    expect(events.some((e) => e.type === "permission_required")).toBe(false);
+    // The call still runs end-to-end without needing approval.
     expect(events.some((e) => e.type === "tool_call_started")).toBe(true);
     expect(events.some((e) => e.type === "tool_result")).toBe(true);
   });

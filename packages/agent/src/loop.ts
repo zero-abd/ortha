@@ -611,9 +611,10 @@ async function* dispatchRun(
   // ── Budget pre-flight ──
   const estimate = await deps.orthogonal.estimateCost([{ api, path, expectedCalls: 1, ...(method ? { method } : {}) }]);
   const estCents = estimate.estimatedCents;
-  // A dynamic price means estCents is a FLOOR, not the exact charge. We force an
-  // explicit approval even when the budget check would pass, so a "watch it spend"
-  // user okays a call that may settle higher than the meter shows.
+  // A dynamic price means estCents is a FLOOR, not the exact charge. We do NOT gate on
+  // that alone — a cheap dynamic call (e.g. 1¢ when the per-call warn is 25¢) shouldn't
+  // nag. A dynamic call gates only when its floor estimate crosses the per-call-warn or
+  // session cap like any other call; we just flag "price varies" on the chip when it does.
   const isDynamic = estimate.hasDynamicPricing;
   // A genuine write always requires an explicit confirmation modal, regardless of cost.
   // Read from the recorded getDetails classification — gateway-authoritative, so the
@@ -630,7 +631,7 @@ async function* dispatchRun(
     return { kind: "cancelled" };
   }
 
-  if (decision.decision === "permission_required" || isDynamic || isWrite) {
+  if (decision.decision === "permission_required" || isWrite) {
     // A write escalates to the side-effect modal (names the action + target + cost);
     // otherwise it's an inline cost chip.
     const kind: "cost" | "side_effect" = isWrite ? "side_effect" : "cost";
