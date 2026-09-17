@@ -1,8 +1,8 @@
 /* ──────────────────────────────────────────────────────────────────────────
-   Ortha — clean, professional console (matches Orthogonal's app aesthetic).
+   Ortha — clean, professional console.
    Light is the default/hero; dark is a supported toggle. Calm monochrome:
    white canvas, hairline borders, near-black primary, thin icons, generous
-   whitespace, Geist (the typeface Orthogonal loads). No gradients/glass.
+   whitespace, Geist. No gradients/glass.
    Tokens are the single source of truth; components never hardcode color.
    ────────────────────────────────────────────────────────────────────────── */
 

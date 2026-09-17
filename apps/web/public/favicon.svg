@@ -1,8 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
-  <!-- Ortha mark: two opposite quarter wedges (NE + SW), orange starburst. -->
-  <rect width="32" height="32" rx="8" fill="#fff4ee"/>
-  <g fill="#ff6b35">
-    <path d="M16 16 L16 6 A10 10 0 0 1 26 16 Z"/>
-    <path d="M16 16 L16 26 A10 10 0 0 1 6 16 Z"/>
-  </g>
+  <!-- Ortha monogram: an ink "O" ring on a light rounded tile. -->
+  <rect width="32" height="32" rx="8" fill="#efeeec"/>
+  <circle cx="16" cy="16" r="8" fill="none" stroke="#18181b" stroke-width="3.5"/>
 </svg>

@@ -5,12 +5,12 @@ Source of truth for Ortha's UI. Every frontend agent builds to this. Locked via
 
 Ortha is an **app console**, not a marketing page. The product's wow is
 *transparency* — the user watches a real agent discover and call real tools — so the
-UI's job is to make that legible without burying the answer. The look matches
-**Orthogonal's actual product**: clean, professional, calm — a light monochrome
+UI's job is to make that legible without burying the answer. The look is
+clean, professional, calm — a light monochrome
 surface, hairline borders, thin icons, generous whitespace. No gradients, no glass,
 no aurora. (We tried that; it read as AI slop. This is the corrected direction.)
 
-### Layout (matches Orthogonal's app)
+### Layout
 - **Left sidebar** (`--sidebar`, 256px): logo + "Ortha" wordmark → account switcher →
   **`+ New chat`** → **conversations list** ("Recent") → bottom: **session cost**,
   "Get free credits ↗", and the **account button (avatar + name + ⚙) which opens
@@ -18,7 +18,7 @@ no aurora. (We tried that; it read as AI slop. This is the corrected direction.)
 - **Main** (white): minimal top bar (model picker · theme toggle · live cost meter
   during a turn). Empty state = centered **"Welcome to Ortha"** + subtitle + large
   **"Ask Ortha"** input + **categorized example cards** (Recruiting, Enrichment) that
-  showcase Orthogonal's catalog. In-conversation = message stream + inline agent-trace
+  showcase the API catalog. In-conversation = message stream + inline agent-trace
   + bottom Ask box.
 
 ## 1. Aesthetic
@@ -49,10 +49,10 @@ overrides.
 Contrast: all body text ≥ 4.5:1 in **both** themes.
 
 ### Logo
-Code-only inline SVG (`components/Logo.tsx`): the real Orthogonal mark — **two opposite
-pie slices** (top-right + bottom-left quarter wedges) on a light rounded tile, black
-mark. Solid-ink "Ortha" wordmark (no gradient). The same two-slice geometry, accent-
-colored and rotating, is the loading spinner.
+Code-only inline SVG (`components/Logo.tsx`): an Ortha monogram, a black **"O" ring**
+on a light rounded tile, next to a solid-ink "Ortha" wordmark (no gradient). The
+loading spinner is the same ring drawn as an accent-colored rotating arc. The favicon
+(`apps/web/public/favicon.svg`) uses the same monogram.
 
 ### Typography
 
